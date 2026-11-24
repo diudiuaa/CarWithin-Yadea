@@ -131,9 +131,17 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         zeehoCardStatus.text = message
     }
     private let ninebotCard = UIStackView()
+    private var ninebotCardInstructions: UILabel?
+    private static let ninebotFiveInstructions = "iPhone 连上仪表 Wi-Fi 后，直接点「启动本机 CarPlay」。\n如果仪表没画面，保持 CarWithin 的 CarPlay 运行，切到九号出行开启投屏导航。仪表出画后，从多任务界面划掉九号出行，再回到 CarWithin。"
+    private static let ninebotOfficialInstructions = "加入仪表 Wi-Fi 后，先在这里启动 CarPlay，再到九号出行开启投屏导航，并让九号出行留在后台。"
     private let ninebotCardStatus = UILabel()
     private let ninebotStatus = StatusLabel()
     private let ninebotAddressField = UITextField()
+    private let ninebot43AddressField = UITextField()
+    private var activeNinebotAddressField: UITextField { outputMode == .ninebot43 ? ninebot43AddressField : ninebotAddressField }
+    private var ninebotInstructions: String {
+        outputMode == .ninebot ? Self.ninebotFiveInstructions : Self.ninebotOfficialInstructions
+    }
     private func updateNinebotStatus(_ message: String) {
         ninebotStatus.text = message
         ninebotCardStatus.text = message
@@ -178,16 +186,28 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
     private lazy var pictureInPicture = CarPlayPictureInPicture(surface: videoSurface)
     private let keepAlive = BackgroundKeepAlive()
     private let keepAliveSwitch = UISwitch()
-    private let headUnitOutput = ChoiceMenu(items: ["浏览器", "CarLife", "AirPlay", "台铃 4.3 寸", "九号 5 寸", "极核 6.2 寸", "雅迪"])
+    private let headUnitOutput = ChoiceMenu(items: ["浏览器", "CarLife", "AirPlay", "台铃 4.3 寸", "九号 5 寸", "极核 6.2 寸", "九号 7 寸", "九号 4.3 寸（实验）", "雅迪"])
     private enum HeadUnitOutput: Int {
-        case browser, carLife, airPlay, tailing, ninebot, zeeho, yadea
-        var usesInstrumentWiFi: Bool { self == .tailing || self == .ninebot || self == .zeeho || self == .yadea }
+        case browser, carLife, airPlay, tailing, ninebot, zeeho, ninebotSeven, ninebot43, yadea
+        var ninebotMode: NinebotOutput.Mode? {
+            switch self {
+            case .ninebot: .fiveInch
+            case .ninebotSeven: .sevenInch
+            case .ninebot43: .fourThreeInch
+            default: nil
+            }
+        }
+        var usesInstrumentWiFi: Bool { self == .tailing || self == .zeeho || self == .yadea || ninebotMode != nil }
     }
     private var airPlayStreamID: UUID?
     private var airPlayStreamURL: URL?
     private var airPlayPlayer: AVPlayer?
     private var airPlayRouteObservation: NSKeyValueObservation?
     private var airPlayItemObservation: NSKeyValueObservation?
+    #if DEBUG
+    private var airPlayTimeObservation: NSKeyValueObservation?
+    private var airPlayDiagnostic = ""
+    #endif
     private static let lastAirPlayDeviceKey = "lastAirPlayDeviceName"
     private var airPlayReady = false
     private let airPlayStatus = StatusLabel()
@@ -435,8 +455,8 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         zeehoSettings.addAction(UIAction { [weak self] _ in self?.revealSettings(output: true) }, for: .touchUpInside)
         zeehoCard.addArrangedSubview(zeehoSettings)
         stack.addArrangedSubview(zeehoCard)
-        configureConnectionCard(ninebotCard, title: "九号 5 寸连接", symbol: "scooter", color: .systemBlue,
-            instructions: "让 iPhone 加入仪表 Wi-Fi，打开仪表投屏后启动 CarPlay。", status: ninebotCardStatus)
+        ninebotCardInstructions = configureConnectionCard(ninebotCard, title: "九号仪表连接", symbol: "scooter", color: .systemBlue,
+            instructions: Self.ninebotFiveInstructions, status: ninebotCardStatus)
         let ninebotSettings = UIButton(type: .system)
         ninebotSettings.configuration = .tinted()
         ninebotSettings.configuration?.title = "连接设置"
@@ -588,7 +608,7 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
             self.updateZeehoStatus(message)
         }
         receiver.onNinebotState = { [weak self] message in
-            guard let self, self.running, self.outputMode == .ninebot else { return }
+            guard let self, self.running, self.outputMode.ninebotMode != nil else { return }
             self.updateNinebotStatus(message)
         }
         receiver.onTailingState = { [weak self] message in
@@ -778,10 +798,16 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
             let icon = ReceiverConfiguration.iconSizes[max(0, iconSizeControl.selectedSegmentIndex)].widthMM
             return DisplayPlan(width: 1024, height: 480, fps: 30, codec: .h264, iconWidthMM: icon)
         }
-        if outputMode == .ninebot {
+        if let mode = outputMode.ninebotMode {
             let icon = ReceiverConfiguration.iconSizes[max(0, iconSizeControl.selectedSegmentIndex)].widthMM
-            return DisplayPlan(width: NinebotOutput.width, height: NinebotOutput.height,
-                               fps: NinebotOutput.fps, codec: .h264, iconWidthMM: icon)
+            let dimensions: (Int, Int)
+            switch mode {
+            case .fiveInch: dimensions = (NinebotOutput.width, NinebotOutput.height)
+            case .sevenInch: dimensions = (NinebotOutput.sevenInchFormat.width, NinebotOutput.sevenInchFormat.height)
+            case .fourThreeInch: dimensions = (NinebotOutput.fourThreeFormat.width * 2, NinebotOutput.fourThreeFormat.height * 2)
+            }
+            // CarPlay advertises at least 30 FPS. NinebotOutput limits the instrument independently.
+            return DisplayPlan(width: dimensions.0, height: dimensions.1, fps: 30, codec: .h264, iconWidthMM: icon)
         }
         if outputMode == .tailing {
             // CarPlay requires at least 320 per side; render 2× the instrument then downsample.
@@ -968,8 +994,9 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         card.layer.cornerCurve = .continuous
     }
 
+    @discardableResult
     private func configureConnectionCard(_ card: UIStackView, title: String, symbol: String, color: UIColor,
-                                         instructions: String, status: UILabel) {
+                                         instructions: String, status: UILabel) -> UILabel {
         configureOutputCard(card)
         let icon = UIImageView(image: UIImage(systemName: symbol))
         icon.tintColor = color
@@ -993,6 +1020,7 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         card.addArrangedSubview(header)
         card.addArrangedSubview(help)
         card.addArrangedSubview(status)
+        return help
     }
 
     private func refreshBrowserAddressLabels() {
@@ -1017,8 +1045,9 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         let showsLocalOutput = modeControl.selectedSegmentIndex != 2
         zeehoCard.isHidden = !showsLocalOutput || outputMode != .zeeho
         if !running { updateZeehoStatus("等待启动 CarPlay · 仪表 IP：\(zeehoAddressField.text ?? "192.168.0.1")") }
-        ninebotCard.isHidden = !showsLocalOutput || outputMode != .ninebot
-        if !running { updateNinebotStatus("等待启动 CarPlay · 仪表 IP：\(ninebotAddressField.text ?? "")") }
+        ninebotCard.isHidden = !showsLocalOutput || outputMode.ninebotMode == nil
+        ninebotCardInstructions?.text = ninebotInstructions
+        if !running { updateNinebotStatus("等待启动 CarPlay · 仪表 IP：\(activeNinebotAddressField.text ?? "")") }
         tailingCard.isHidden = !showsLocalOutput || outputMode != .tailing
         if !running { updateTailingStatus("等待启动 CarPlay · 仪表 IP：\(tailingAddressField.text ?? "192.168.1.1")") }
         yadeaCard.isHidden = !showsLocalOutput || outputMode != .yadea
@@ -1075,8 +1104,9 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         if outputMode == .zeeho {
             config.zeehoAddress = (zeehoAddressField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        if outputMode == .ninebot {
-            config.ninebotAddress = (ninebotAddressField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if let mode = outputMode.ninebotMode {
+            config.ninebotAddress = (activeNinebotAddressField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            config.ninebotMode = mode
         }
         if outputMode.usesInstrumentWiFi {
             let screen = view.window?.screen ?? UIScreen.main
@@ -1461,6 +1491,7 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
             if !restartingAutomatically { autoRestarts = 0; lightLevel = 0; reportedScreen = nil; primaryViewer = nil }
             configureDisplay(&config)
             do { try config.validate() } catch {
+                log("无法启动本机 CarPlay：\(error.localizedDescription)")
                 revealSettings(); statusLabel.text = error.localizedDescription; return
             }
             liveDisplay = DisplayPlan(width: config.width, height: config.height, fps: config.maxFPS,
@@ -1593,8 +1624,14 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         clearStartupHint()
         airPlayReady = false
         airPlayItemObservation = nil
+        airPlayRouteObservation = nil
+        #if DEBUG
+        airPlayTimeObservation = nil
+        #endif
         airPlayPlayer?.pause()
         airPlayPlayer?.replaceCurrentItem(with: nil)
+        airPlayPlayer?.allowsExternalPlayback = false
+        airPlayPlayer = nil
         airPlayStreamID = nil; airPlayStreamURL = nil
         airPlayRetryButton.isHidden = true
         updateAirPlayStatus("等待启动 CarPlay。")
@@ -1688,6 +1725,7 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         headUnitOutput.isEnabled = value
         zeehoAddressField.isEnabled = value
         ninebotAddressField.isEnabled = value
+        ninebot43AddressField.isEnabled = value
         tailingAddressField.isEnabled = value
         carLifeAddressField.isEnabled = value
     }
@@ -1923,6 +1961,9 @@ extension ReceiverViewController {
         ninebotAddressField.text = defaults.string(forKey: "ninebotAddress") ?? "192.168.1.1"
         ninebotAddressField.keyboardType = .decimalPad
         ninebotAddressField.addTarget(self, action: #selector(saveHeadUnitOutput), for: .editingDidEnd)
+        ninebot43AddressField.text = defaults.string(forKey: "ninebot43Address") ?? "192.168.169.1"
+        ninebot43AddressField.keyboardType = .decimalPad
+        ninebot43AddressField.addTarget(self, action: #selector(saveHeadUnitOutput), for: .editingDidEnd)
         tailingAddressField.text = defaults.string(forKey: "tailingAddress") ?? "192.168.1.1"
         tailingAddressField.keyboardType = .decimalPad
         tailingAddressField.addTarget(self, action: #selector(saveHeadUnitOutput), for: .editingDidEnd)
@@ -1952,7 +1993,7 @@ extension ReceiverViewController {
         }
         nameField.addTarget(self, action: #selector(receiverNameChanged), for: .editingDidEnd)
         channelField.keyboardType = .numberPad
-        [nameField, ipField, ssidField, passwordField, channelField, carLifeAddressField, tailingAddressField, ninebotAddressField, zeehoAddressField, yadeaAddressField, videoOutputPortField, secureVideoOutputPortField, httpsDomainField, httpsTokenField].forEach {
+        [nameField, ipField, ssidField, passwordField, channelField, carLifeAddressField, tailingAddressField, ninebotAddressField, ninebot43AddressField, zeehoAddressField, yadeaAddressField, videoOutputPortField, secureVideoOutputPortField, httpsDomainField, httpsTokenField].forEach {
             $0.returnKeyType = .done
             $0.addTarget($0, action: #selector(UIResponder.resignFirstResponder), for: .editingDidEndOnExit)
             if $0.inputAccessoryView == nil {
@@ -1972,6 +2013,7 @@ extension ReceiverViewController {
         UserDefaults.standard.set(carLifeAddressField.text ?? "", forKey: "carLifeAddress")
         UserDefaults.standard.set(zeehoAddressField.text ?? "", forKey: "zeehoAddress")
         UserDefaults.standard.set(ninebotAddressField.text ?? "", forKey: "ninebotAddress")
+        UserDefaults.standard.set(ninebot43AddressField.text ?? "", forKey: "ninebot43Address")
         UserDefaults.standard.set(tailingAddressField.text ?? "", forKey: "tailingAddress")
         UserDefaults.standard.set(yadeaAddressField.text ?? "", forKey: "yadeaAddress")
         refreshVideoOutputSummary()
@@ -2060,7 +2102,7 @@ extension ReceiverViewController {
                     .guide("浏览器", icon: ("globe", .systemTeal),
                            "车机连同一个 Wi-Fi。在「当前输出」选浏览器，启动 CarPlay，再用车机打开首页显示的 HTTP 地址。"),
                     .guide("车机或仪表", icon: ("car.fill", .systemIndigo),
-                           "选你的设备支持的输出。CarLife 先打开车机上的 CarLife；台铃和九号先加入仪表 Wi-Fi、打开仪表投屏；AirPlay 在首页选接收设备。")
+                           "使用仪表时先加入仪表 Wi-Fi，再按首页连接卡的顺序操作。CarLife 先打开车机上的 CarLife；AirPlay 在首页选接收设备。")
                 ]),
                 SettingsSection("3. 常见问题", [
                     .guide("卡在正在连接", icon: ("arrow.clockwise", .systemOrange),
@@ -2231,10 +2273,16 @@ extension ReceiverViewController {
                     SettingsSection("图标", [.control("CarPlay 图标大小", icon: ("square.grid.2x2.fill", .systemPurple), iconSizeControl)])
                 ]
             }
-            if outputMode == .ninebot {
+            if let mode = outputMode.ninebotMode {
+                let format: String
+                switch mode {
+                case .fiveInch: format = "848×480 · H.264 · 最高 30 FPS"
+                case .sevenInch: format = "1024×600 · H.264 · 最高 25 FPS"
+                case .fourThreeInch: format = "480×272 · JPEG · 最高 10 FPS"
+                }
                 return [
-                    SettingsSection("九号 5 寸", [
-                        .info("本机与仪表画面", "848×480 · H.264 · 30 FPS")
+                    SettingsSection(headUnitOutput.selectedTitle, [
+                        .info("仪表画面", format)
                     ]),
                     SettingsSection("图标", [.control("CarPlay 图标大小", icon: ("square.grid.2x2.fill", .systemPurple), iconSizeControl)])
                 ]
@@ -2563,9 +2611,9 @@ extension ReceiverViewController {
                     .field("仪表 IP 地址", zeehoAddressField, placeholder: "192.168.0.1"),
                     .note(zeehoStatus)
                 ])]
-            case .ninebot:
-                return [SettingsSection("九号 5 寸", footer: "iPhone 加入仪表 Wi-Fi 后，选择对应的 Wi-Fi 预设。先结束其他投屏，再打开仪表的投屏功能。声音由 iPhone 或蓝牙输出，触控在手机上操作。", [
-                    .field("仪表 IP 地址", ninebotAddressField, placeholder: "192.168.1.1"),
+            case .ninebot, .ninebotSeven, .ninebot43:
+                return [SettingsSection(headUnitOutput.selectedTitle, footer: outputMode == .ninebot ? ninebotInstructions : "\(ninebotInstructions) 切换 App 前请打开「锁屏与后台继续运行」。", [
+                    .field("仪表 IP 地址", activeNinebotAddressField, placeholder: outputMode == .ninebot43 ? "192.168.169.1" : "192.168.1.1"),
                     .note(ninebotStatus)
                 ])]
             case .yadea:
@@ -2593,7 +2641,7 @@ extension ReceiverViewController {
         }
         guard let id = configuration.airPlayStreamID, let port = configuration.videoOutputPort else { return }
         airPlayStreamID = id
-        airPlayStreamURL = URL(string: "http://\(configuration.address):\(port)/airplay/\(id.uuidString)/index.m3u8")
+        airPlayStreamURL = URL(string: "http://\(configuration.address):\(port)/airplay/\(id.uuidString)/master.m3u8")
         updateAirPlayStatus("正在准备直播画面…")
     }
 
@@ -2603,8 +2651,7 @@ extension ReceiverViewController {
         if let existing = airPlayPlayer {
             player = existing
         } else {
-            // Local video stays on the CarPlay surface. Keep the transport player across
-            // sessions so an AirPlay route still held by iOS can receive the next item.
+            // Local video stays on the CarPlay surface. Each session owns its player.
             player = AVPlayer()
             player.allowsExternalPlayback = true
             player.usesExternalPlaybackWhileExternalScreenIsActive = true
@@ -2614,6 +2661,13 @@ extension ReceiverViewController {
             airPlayPlayer = player
         }
         let item = AVPlayerItem(url: url)
+        #if DEBUG
+        airPlayDiagnostic = ""
+        log("AirPlay HLS 已就绪：\(url.absoluteString)")
+        airPlayTimeObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async { [weak self] in self?.refreshAirPlayPlaybackStatus() }
+        }
+        #endif
         airPlayItemObservation = item.observe(\.status, options: [.new]) { [weak self, weak item] _, _ in
             DispatchQueue.main.async { [weak self, weak item] in
                 guard let self, let item, self.airPlayPlayer?.currentItem === item else { return }
@@ -2632,6 +2686,13 @@ extension ReceiverViewController {
     private func refreshAirPlayPlaybackStatus() {
         guard running, outputMode == .airPlay, airPlayReady, let player = airPlayPlayer,
               let item = player.currentItem else { return }
+        #if DEBUG
+        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs.map { "\($0.portType.rawValue)/\($0.portName)" }.joined(separator: ", ")
+        let error = item.error as NSError?
+        let errorDetail = error.map { "\($0.domain)(\($0.code)) \($0.localizedDescription)" } ?? "–"
+        let diagnostic = "AirPlay 播放器：item=\(item.status.rawValue) time=\(player.timeControlStatus.rawValue) 外部视频=\(player.isExternalPlaybackActive) 路由=\(outputs) 等待=\(player.reasonForWaitingToPlay?.rawValue ?? "–") 错误=\(errorDetail)"
+        if diagnostic != airPlayDiagnostic { airPlayDiagnostic = diagnostic; log(diagnostic) }
+        #endif
         airPlayRetryButton.isHidden = item.status != .failed
         if item.status == .failed {
             updateAirPlayStatus("AirPlay 画面加载失败，可以重试。")

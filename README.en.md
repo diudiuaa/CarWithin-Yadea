@@ -10,8 +10,8 @@ CarWithin runs CarPlay on the same iPhone that generates its interface. Use CarP
 
 ## Download and install
 
-- [Download from GitHub Releases](https://github.com/xmz28/CarWithin/releases/latest). The current version is **1.0.3 (build 15)**.
-- Download `CarWithin-1.0.3-unsigned.ipa` and sign and install it with an IPA sideloading tool using your own signing setup. Follow any iOS prompts for developer trust or Developer Mode.
+- [Download from GitHub Releases](https://github.com/xmz28/CarWithin/releases/latest). The current version is **1.0.4 (build 16)**.
+- Download `CarWithin-1.0.4-unsigned.ipa` and sign and install it with an IPA sideloading tool using your own signing setup. Follow any iOS prompts for developer trust or Developer Mode.
 - The minimum installation target is iOS/iPadOS 16.0 on arm64; iOS 15 is not supported. Same-device CarPlay, audio, and background behavior still need testing on iOS 16.x hardware. CarWithin uses private iOS interfaces. Compatibility depends on the device, OS version, and signing setup, and OS updates can affect it.
 
 ## Quick start
@@ -80,9 +80,15 @@ Connect the iPhone to the instrument Wi-Fi, select the matching preset and choos
 
 One instrument was tested successfully, including screen lock. Other models and long sessions require further testing.
 
+### Additional dashboard support
+
+- **Ninebot 7-inch:** Connect to the dashboard Wi-Fi, select this output, start CarPlay, then enable navigation casting in Ninebot app and keep it running in the background. Display was confirmed on one dashboard.
+- **Ninebot 4.3-inch (experimental):** Uses the N1 90 protocol, with default address `192.168.169.1`. Follow the same startup order. Physical dashboard testing is pending.
+- **AirPlay (experimental):** Startup and reconnection may fail, and the receiver may retain the last picture after stopping.
+
 ### Ninebot 5-inch display
 
-Connect the iPhone to the instrument Wi-Fi, select its saved Wi-Fi preset, and choose Ninebot 5-inch under Current output. Enable screen projection on the instrument, then start CarPlay. The default instrument IP is `192.168.1.1`, configurable under Output settings. Audio plays through the iPhone or Bluetooth; control CarPlay on the phone.
+Connect the iPhone to the instrument Wi-Fi, select its saved Wi-Fi preset, and choose Ninebot 5-inch under Current output. Start CarPlay. If the dashboard has no picture, keep CarWithin running, enable projection navigation in the Ninebot app, then close the Ninebot app from the app switcher after the dashboard shows a picture and return to CarWithin. The default instrument IP is `192.168.1.1`, configurable under Output settings. Audio plays through the iPhone or Bluetooth; control CarPlay on the phone.
 
 One instrument was tested with repeated backgrounding and screen locks. Perceived latency was approximately 500–600 ms. Other instrument versions need testing.
 

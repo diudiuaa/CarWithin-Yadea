@@ -311,15 +311,22 @@ final class YadeaOutput {
             return nil
         }
 
-        /// 等比缩放并居中，铺黑边到目标尺寸。
+        /// 铺满目标区域后居中裁切，避免黑边。
+        ///
+        /// 仪表屏是 800×384（≈2.08:1），而 CarPlay 请求的是 800×480（16:9），
+        /// 等比「适配」会在左右各留 80px 黑边（合计占宽 20%），观感很差。
+        /// 这里改为等比「填充」：先按铺满缩放，再居中裁掉上下多余部分，做到满屏。
         private func fittedImage(_ source: CIImage, width: Int, height: Int) -> CIImage {
             let w = CGFloat(width), h = CGFloat(height)
             if abs(source.extent.width - w) < 1, abs(source.extent.height - h) < 1 { return source }
-            let scale = min(w / source.extent.width, h / source.extent.height)
+            let scale = max(w / source.extent.width, h / source.extent.height)
             let scaled = source.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            // 多出来的高度怎么分配：0 = 全裁顶部（保留底部），1 = 全裁底部（保留顶部），0.5 = 上下均分
+            let overflow = scaled.extent.height - h
+            let bias: CGFloat = 0.5
             let positioned = scaled.transformed(by: CGAffineTransform(
                 translationX: (w - scaled.extent.width) / 2,
-                y: (h - scaled.extent.height) / 2))
+                y: -overflow * bias))
             let bounds = CGRect(x: 0, y: 0, width: w, height: h)
             return positioned.composited(over: CIImage(color: .black)).cropped(to: bounds)
         }

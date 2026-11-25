@@ -17,6 +17,7 @@
 		64576F6B578385AC20CCF3BF /* App/NinebotH264Encoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AF3F2E542AC14DF20A41F8A /* App/NinebotH264Encoder.swift */; };
 		73708DB94B38AB7D108A63DC /* App/NinebotUDPSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6983BA5CA7041AE8981B978 /* App/NinebotUDPSocket.swift */; };
 		787B68294EBA398040FCE3F1 /* App/NinebotProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D368B6A679BA4668F1A3B6 /* App/NinebotProtocol.swift */; };
+		B1A0DEA000000000000000C1 /* App/YadeaKeyMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1A0DEA000000000000000C2 /* App/YadeaKeyMap.swift */; };
 		B1A0DEA000000000000000A1 /* App/YadeaProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1A0DEA000000000000000A2 /* App/YadeaProtocol.swift */; };
 		B1A0DEA000000000000000B1 /* App/YadeaOutput.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1A0DEA000000000000000B2 /* App/YadeaOutput.swift */; };
 		38811CA28378E6A4820813DC /* App/NinebotOutput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48E1C9F471B51889D986E066 /* App/NinebotOutput.swift */; };
@@ -107,6 +108,7 @@
 		6AF3F2E542AC14DF20A41F8A /* App/NinebotH264Encoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/NinebotH264Encoder.swift; sourceTree = "<group>"; };
 		D6983BA5CA7041AE8981B978 /* App/NinebotUDPSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/NinebotUDPSocket.swift; sourceTree = "<group>"; };
 		E9D368B6A679BA4668F1A3B6 /* App/NinebotProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/NinebotProtocol.swift; sourceTree = "<group>"; };
+		B1A0DEA000000000000000C2 /* App/YadeaKeyMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/YadeaKeyMap.swift; sourceTree = "<group>"; };
 		B1A0DEA000000000000000A2 /* App/YadeaProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/YadeaProtocol.swift; sourceTree = "<group>"; };
 		B1A0DEA000000000000000B2 /* App/YadeaOutput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/YadeaOutput.swift; sourceTree = "<group>"; };
 		48E1C9F471B51889D986E066 /* App/NinebotOutput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/NinebotOutput.swift; sourceTree = "<group>"; };
@@ -212,6 +214,7 @@
                 AAAAAAAA0000000000000006 /* KCP-LICENSE.txt */,
 				D6983BA5CA7041AE8981B978 /* App/NinebotUDPSocket.swift */,
 				E9D368B6A679BA4668F1A3B6 /* App/NinebotProtocol.swift */,
+				B1A0DEA000000000000000C2 /* App/YadeaKeyMap.swift */,
 				B1A0DEA000000000000000A2 /* App/YadeaProtocol.swift */,
 				B1A0DEA000000000000000B2 /* App/YadeaOutput.swift */,
 				48E1C9F471B51889D986E066 /* App/NinebotOutput.swift */,
@@ -374,6 +377,7 @@
 				64576F6B578385AC20CCF3BF /* App/NinebotH264Encoder.swift in Sources */,
 				73708DB94B38AB7D108A63DC /* App/NinebotUDPSocket.swift in Sources */,
 				787B68294EBA398040FCE3F1 /* App/NinebotProtocol.swift in Sources */,
+				B1A0DEA000000000000000C1 /* App/YadeaKeyMap.swift in Sources */,
 				B1A0DEA000000000000000A1 /* App/YadeaProtocol.swift in Sources */,
 				B1A0DEA000000000000000B1 /* App/YadeaOutput.swift in Sources */,
 				38811CA28378E6A4820813DC /* App/NinebotOutput.swift in Sources */,

@@ -31,6 +31,8 @@ struct ReceiverConfiguration {
     var ninebotMode: NinebotOutput.Mode = .fiveInch
     var tailingAddress: String?
     var yadeaAddress: String?
+    /// 仪表按键 → 动作的十六进制模式（动作 rawValue → 如 "1A 01"）。留空表示不启用按键。
+    var yadeaKeyMap: [String: String] = [:]
     var tailingPhoneInfo: TailingPhoneInfo?
     var carLinkRelayAddress: String?
     static let carLinkRelayPort: UInt16 = 24890
@@ -176,6 +178,10 @@ struct ReceiverConfiguration {
                   UInt32(bigEndian: target.s_addr) < 0xe0000000 else {
                 throw ConfigurationError("请输入有效的雅迪仪表 IPv4 地址，与本机 IP 不同。")
             }
+        }
+        for (action, text) in yadeaKeyMap where YadeaKeyMap.parse(text) == nil {
+            let title = YadeaKeyAction(rawValue: action)?.title ?? action
+            throw ConfigurationError("「仪表按键 · \(title)」的格式不对，请写成 1A 01 这样的偶数位十六进制。")
         }
         if let carLinkRelayAddress {
             var address = in_addr()

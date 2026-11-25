@@ -72,6 +72,11 @@ final class YadeaOutput {
         private var nextFrameAt = 0.0
         private var status = ""
 
+        /// 仪表面板物理高度。0x20 只回报中间可用的投屏区（800×384），
+        /// 上下各 48px 由仪表绘制状态栏与 Logo；整块面板实际是 800×480。
+        /// 实验：按整高投送，验证仪表是否支持把这两条半透明叠加在画面上。
+        private let panelHeight = 480
+
         private enum Phase { case connecting, negotiating, running }
         private var phase = Phase.connecting
         private var negotiatedAt = 0.0
@@ -256,7 +261,7 @@ final class YadeaOutput {
             phase = .running
             nextFrameAt = now
             nextHeartbeat = now
-            report("正在投屏 · \(navConfig.summary) · JPEG")
+            report("正在投屏 · \(navConfig.width)×\(panelHeight)（全屏实验）· JPEG")
         }
 
         private func runFrameAndHeartbeat(now: Double) {
@@ -277,7 +282,11 @@ final class YadeaOutput {
             guard let latest, fresh || now - lastFrame >= 0.5 else { return }
             lastFrame = now
             fresh = false
-            guard let jpeg = encodeJPEG(latest, width: navConfig.width, height: navConfig.height) else { return }
+            // 实验：仪表 0x20 回报的投屏区高度是 384（上下各留 48px 画状态栏和 Logo），
+            // 但官方投屏时这两条是半透明叠加在画面上的，说明投屏层其实能铺满 480。
+            // 这里忽略回报高度，按物理面板整高投送，验证仪表是否支持全屏模式。
+            let targetHeight = panelHeight
+            guard let jpeg = encodeJPEG(latest, width: navConfig.width, height: targetHeight) else { return }
             let timestamp = UInt32(Int64(Date().timeIntervalSince1970 * 1000) & 0xFFFFFFFF)
             let frames = YadeaProtocol.buildImageFrames(image: YadeaProtocol.bytes(jpeg), imageSeq: imageSequence,
                                                         timestamp: timestamp)

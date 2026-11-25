@@ -86,6 +86,11 @@ final class YadeaOutput {
         private var tcp: YadeaTCPSocket?
         private var udp: NinebotUDPSocket?
         private var rxBuffer: [UInt8] = []
+        private var localAddress = ""
+        private var targetAddress = ""
+        /// 缓冲里拼不出帧、又一直等不到新字节时的连续等待次数（超过就按垃圾字节处理）。
+        private var stallWaits = 0
+        private var lastWaitSize = 0
 
         private var decoder: TailingH264Decoder?
         private var parameters = VideoParameterSets(codec: .h264)
@@ -141,6 +146,8 @@ final class YadeaOutput {
 
         func start(_ local: String, _ target: String) {
             guard active else { return }
+            localAddress = local
+            targetAddress = target
             report("正在连接雅迪仪表…")
             do {
                 udp = try NinebotUDPSocket(localIP: local, localPort: 0, remoteIP: target, remotePort: YadeaProtocol.imagePort)
@@ -282,7 +289,10 @@ final class YadeaOutput {
                 report("仪表已回应，正在投屏 · \(navConfig.summary)")
                 beginRunning(now: ProcessInfo.processInfo.systemUptime)
             case YadeaProtocol.cmdNavEndResponse, YadeaProtocol.cmdStatusResponse, YadeaProtocol.cmdRateResponse:
-                let token = YadeaKeyMap.token(type: type, payload: payload)
+                // 仪表可能把按键塞在这些「应答」类型里（0x25 的 payload 每次不同），
+                // 所以先过一遍用户映射，命中了就执行，不命中才当状态记一行。
+                if fireKey(type: type, payload: payload) { return }
+                let token = YadeaKeyMap.token(type: type, payload: payload, limit: 12)
                 if seenTokens.insert(token).inserted { onLog("仪表上报 \(token)（结束／状态／帧率应答）") }
             default:
                 handleUnmapped(type: type, payload: payload)
@@ -305,44 +315,85 @@ final class YadeaOutput {
 
         /// 未知命令：命中用户配置的按键映射就转成 CarPlay 动作，否则打印一次供用户填写。
         private func handleUnmapped(type: UInt8, payload: [UInt8]) {
-            let token = YadeaKeyMap.token(type: type, payload: payload)
-            if let action = keyMap.match(type: type, payload: payload) {
-                let now = ProcessInfo.processInfo.systemUptime
-                if now - lastActionAt[action.rawValue, default: -1] < 0.15 { return }
-                lastActionAt[action.rawValue] = now
-                onLog("仪表按键 \(token) → \(action.title)")
-                onKey(action)
-                return
-            }
+            if fireKey(type: type, payload: payload) { return }
+            let token = YadeaKeyMap.token(type: type, payload: payload, limit: 12)
             guard seenTokens.insert(token).inserted else { return }
             onLog("仪表上行 \(token)（未映射：把这串填进「仪表按键」里对应动作即可）")
         }
 
+        /// 命中用户映射就执行并返回 true；150 毫秒内同一动作只认一次。
+        @discardableResult
+        private func fireKey(type: UInt8, payload: [UInt8]) -> Bool {
+            guard let action = keyMap.match(type: type, payload: payload) else { return false }
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - lastActionAt[action.rawValue, default: -1] < 0.15 { return true }
+            lastActionAt[action.rawValue] = now
+            onLog("仪表按键 \(YadeaKeyMap.token(type: type, payload: payload, limit: 12)) → \(action.title)")
+            onKey(action)
+            return true
+        }
+
+        private func magicPosition() -> Int? {
+            guard rxBuffer.count >= 2 else { return nil }
+            for i in 0...(rxBuffer.count - 2) where rxBuffer[i] == 0x59 && rxBuffer[i + 1] == 0x44 { return i }
+            return nil
+        }
+
+        /// 拼不成帧时把整段字节打出来。
+        ///
+        /// 原来只打前 16 个字节，而一帧 23 字节，正好把尾部关键字段截断，
+        /// 造成「看到半帧也不知道是什么」；现在最多打 96 字节，并带上长度字段与协议字。
+        private func rejectFrame(_ bytes: [UInt8], declared: Int, protocolID: UInt8) {
+            let now = ProcessInfo.processInfo.systemUptime
+            guard now - lastDroppedLog >= 1 else { return }
+            let hex = bytes.prefix(96).map { String(format: "%02X", $0) }.joined(separator: " ")
+            guard seenTokens.insert("REJ " + hex).inserted else { return }
+            lastDroppedLog = now
+            onLog("仪表原始数据 \(hex)（\(bytes.count) 字节，长度字段 \(declared)，协议字 0x\(String(format: "%02X", protocolID))，未解析）")
+        }
+
         /// 从缓冲中扫描魔数 5944 解析出一帧，解析到即返回并移除。
+        ///
+        /// 长度字段有两种写法：本机发出的帧把 SUM8 与 4B4A 一起计入（内容 + 3），
+        /// 仪表自己发的帧只计入 SUM8（内容 + 1）。早先只按前者解析，
+        /// 仪表上行的 0x25 之类会被整帧判成「非标准帧」丢弃，按键永远是空的。
+        /// 现在两种长度都试，谁的尾标 4B4A 对得上就按谁切帧。
         private func nextBufferedFrame() -> (type: UInt8, payload: [UInt8])? {
             while rxBuffer.count >= 12 {
-                // 扫描魔数 59 44
-                var pos = -1
-                for i in 0...(rxBuffer.count - 2) where rxBuffer[i] == 0x59 && rxBuffer[i + 1] == 0x44 {
-                    pos = i
-                    break
-                }
-                guard pos >= 0 else { noteDropped(rxBuffer[...]); rxBuffer.removeAll(); return nil }
+                guard let pos = magicPosition() else { noteDropped(rxBuffer[...]); rxBuffer.removeAll(); return nil }
                 if pos > 0 { noteDropped(rxBuffer[0..<pos]); rxBuffer.removeFirst(pos) }
                 guard rxBuffer.count >= 7 else { return nil }
-                let innerLen = Int(YadeaProtocol.readUInt32BE(rxBuffer, offset: 3))
-                guard innerLen >= 3, innerLen <= 1_048_576 else { rxBuffer.removeFirst(); continue }
-                let totalFrameLen = innerLen + 7
-                guard rxBuffer.count >= totalFrameLen else { return nil }
-                guard rxBuffer[totalFrameLen - 2] == 0x4B, rxBuffer[totalFrameLen - 1] == 0x4A else {
-                    noteDropped(rxBuffer[0..<1])
-                    rxBuffer.removeFirst(); continue
+
+                let protocolID = rxBuffer[2]
+                let declared = Int(YadeaProtocol.readUInt32BE(rxBuffer, offset: 3))
+                guard declared >= 1, declared <= 1_048_576 else { rxBuffer.removeFirst(); continue }
+
+                let totals = [declared + 7, declared + 9].filter { $0 >= 10 }
+                if let total = totals.first(where: {
+                    $0 <= rxBuffer.count && rxBuffer[$0 - 2] == 0x4B && rxBuffer[$0 - 1] == 0x4A
+                }) {
+                    let frame = Array(rxBuffer[0..<total])
+                    rxBuffer.removeFirst(total)
+                    if let inner = YadeaProtocol.parseInnerPacket(Array(frame[7..<(frame.count - 3)])) {
+                        return (inner.type, inner.payload)
+                    }
+                    // 尾标对上了但内层读不出来：整帧留证，继续找下一帧
+                    rejectFrame(frame, declared: declared, protocolID: protocolID)
+                    continue
                 }
-                let frame = Array(rxBuffer[0..<totalFrameLen])
-                rxBuffer.removeFirst(totalFrameLen)
-                if let parsed = YadeaProtocol.parseFrame(frame) {
-                    return (parsed.type, parsed.payload)
+
+                // 还差字节就等下一批（TCP 可能把一帧拆成两次到达）；
+                // 但如果反复等不到新字节，说明这串永远拼不成帧，当垃圾字节打出来。
+                if let longest = totals.max(), rxBuffer.count < longest {
+                    stallWaits = lastWaitSize == rxBuffer.count ? stallWaits + 1 : 0
+                    lastWaitSize = rxBuffer.count
+                    if stallWaits < 25 { return nil }
                 }
+                stallWaits = 0
+                lastWaitSize = 0
+                let dumpLength = min(max(totals.min() ?? 12, 12), rxBuffer.count, 96)
+                rejectFrame(Array(rxBuffer[0..<dumpLength]), declared: declared, protocolID: protocolID)
+                rxBuffer.removeFirst(1)
             }
             return nil
         }
@@ -399,7 +450,36 @@ final class YadeaOutput {
                 }
                 imageSequence &+= 1
             } catch let error as NinebotSocketError where error.isTransient {}
-            catch { fail(error) }
+            catch {
+                // 网络切换（家里换公司、切热点、后台回来）后旧的 UDP socket 还绑在失效的本机地址上，
+                // 发送会直接返回 EADDRNOTAVAIL(49)。这里原地重开图片通道，不用手动重连。
+                if isAddressLost(error), rebuildUDP() {
+                    onLog("雅迪：本机地址已变化，已重开图片通道，继续投屏")
+                    nextFrameAt = now + Double(navConfig.frameIntervalMs) / 1000.0
+                    return
+                }
+                fail(error)
+            }
+        }
+
+        /// 旧的 UDP socket 绑在已失效的本机地址上时，发送会返回 EADDRNOTAVAIL(49)。
+        private func isAddressLost(_ error: Error) -> Bool {
+            guard case .operation(_, let code)? = error as? NinebotSocketError else { return false }
+            return code == EADDRNOTAVAIL || code == ENETDOWN || code == ENETUNREACH
+        }
+
+        /// 重开图片通道：先试原本机地址，再试 0.0.0.0（交给内核按路由选源地址）。
+        private func rebuildUDP() -> Bool {
+            guard !targetAddress.isEmpty else { return false }
+            for local in [localAddress, "0.0.0.0"] where !local.isEmpty {
+                if let socket = try? NinebotUDPSocket(localIP: local, localPort: 0,
+                                                      remoteIP: targetAddress,
+                                                      remotePort: YadeaProtocol.imagePort) {
+                    udp = socket
+                    return true
+                }
+            }
+            return false
         }
 
         // MARK: - JPEG 编码

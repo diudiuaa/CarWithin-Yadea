@@ -156,6 +156,17 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
     private let yadeaCard = UIStackView()
     private let yadeaCardStatus = UILabel()
     private let yadeaAddressField = UITextField()
+    /// 仪表按键映射输入框（动作 → 十六进制模式）。
+    private lazy var yadeaKeyFields: [(action: YadeaKeyAction, field: UITextField)] = YadeaKeyAction.allCases.map { action in
+        let field = UITextField()
+        field.placeholder = "如 1A 01"
+        field.autocapitalizationType = .allCharacters
+        field.autocorrectionType = .no
+        field.spellCheckingType = .no
+        field.keyboardType = .asciiCapable
+        field.accessibilityLabel = "仪表按键 \(action.title)"
+        return (action: action, field: field)
+    }
     private let yadeaStatus = StatusLabel()
     private func updateYadeaStatus(_ message: String) {
         yadeaStatus.text = message; yadeaCardStatus.text = message
@@ -1129,6 +1140,12 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         }
         if outputMode == .yadea {
             config.yadeaAddress = (yadeaAddressField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            var keyMap: [String: String] = [:]
+            for (action, field) in yadeaKeyFields {
+                let text = (field.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty { keyMap[action.rawValue] = text }
+            }
+            config.yadeaKeyMap = keyMap
         }
         config.carLifeEnabled = outputMode == .carLife
         let carLifeAddress = (carLifeAddressField.text ?? "").trimmingCharacters(in: .whitespaces)
@@ -1970,6 +1987,10 @@ extension ReceiverViewController {
         yadeaAddressField.text = defaults.string(forKey: "yadeaAddress") ?? "192.168.0.1"
         yadeaAddressField.keyboardType = .decimalPad
         yadeaAddressField.addTarget(self, action: #selector(saveHeadUnitOutput), for: .editingDidEnd)
+        for (action, field) in yadeaKeyFields {
+            field.text = defaults.string(forKey: action.storageKey)
+            field.addTarget(self, action: #selector(saveHeadUnitOutput), for: .editingDidEnd)
+        }
         carLifeAddressField.text = defaults.string(forKey: "carLifeAddress")
         carLifeAddressField.keyboardType = .decimalPad
         carLifeAddressField.addTarget(self, action: #selector(saveHeadUnitOutput), for: .editingDidEnd)
@@ -1993,7 +2014,7 @@ extension ReceiverViewController {
         }
         nameField.addTarget(self, action: #selector(receiverNameChanged), for: .editingDidEnd)
         channelField.keyboardType = .numberPad
-        [nameField, ipField, ssidField, passwordField, channelField, carLifeAddressField, tailingAddressField, ninebotAddressField, ninebot43AddressField, zeehoAddressField, yadeaAddressField, videoOutputPortField, secureVideoOutputPortField, httpsDomainField, httpsTokenField].forEach {
+        ([nameField, ipField, ssidField, passwordField, channelField, carLifeAddressField, tailingAddressField, ninebotAddressField, ninebot43AddressField, zeehoAddressField, yadeaAddressField, videoOutputPortField, secureVideoOutputPortField, httpsDomainField, httpsTokenField] + yadeaKeyFields.map { $0.field }).forEach {
             $0.returnKeyType = .done
             $0.addTarget($0, action: #selector(UIResponder.resignFirstResponder), for: .editingDidEndOnExit)
             if $0.inputAccessoryView == nil {
@@ -2016,6 +2037,11 @@ extension ReceiverViewController {
         UserDefaults.standard.set(ninebot43AddressField.text ?? "", forKey: "ninebot43Address")
         UserDefaults.standard.set(tailingAddressField.text ?? "", forKey: "tailingAddress")
         UserDefaults.standard.set(yadeaAddressField.text ?? "", forKey: "yadeaAddress")
+        for (action, field) in yadeaKeyFields {
+            let text = (field.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.isEmpty { UserDefaults.standard.removeObject(forKey: action.storageKey) }
+            else { UserDefaults.standard.set(text, forKey: action.storageKey) }
+        }
         refreshVideoOutputSummary()
     }
     @objc private func headUnitOutputChanged() {
@@ -2728,7 +2754,9 @@ extension ReceiverViewController {
             SettingsSection("雅迪", footer: "适用于带 TFT 智慧屏的雅迪车型（如冠能龙霆 70-M）。iPhone 加入仪表 Wi-Fi 后，打开仪表导航投屏，再启动 CarPlay。请先退出「雅迪智行」App 的投屏。", [
                 .field("仪表 IP 地址", yadeaAddressField, placeholder: "192.168.0.1")
             ]),
-            SettingsSection(footer: "仪表画面按协商分辨率输出（默认 800×480、最高 10 FPS），以 JPEG 分片发送。本机 CarPlay 使用 H.264、800×480、30 FPS。声音由 iPhone／蓝牙输出；仪表不回传触控。", [.note(yadeaStatus)])
+            SettingsSection(footer: "仪表画面按协商分辨率输出（默认 800×480、最高 10 FPS），以 JPEG 分片发送。本机 CarPlay 使用 H.264、800×480、30 FPS。声音由 iPhone／蓝牙输出。", [.note(yadeaStatus)]),
+            SettingsSection("仪表按键（可选）", footer: "把车把／仪表上的按键接到 CarPlay。投屏后先按一下任意按键，日志会打出形如「仪表上行 1A 01 00」的一行；把那一串填进对应动作即可，填完立即生效、无需重装。上移／下移是移动选中，左右滑是翻页，确认是打开当前项。仪表不回传按键时这几框留空即可。",
+                yadeaKeyFields.map { SettingsRow.field($0.action.title, $0.field, placeholder: "如 1A 01") })
         ]
     }
 

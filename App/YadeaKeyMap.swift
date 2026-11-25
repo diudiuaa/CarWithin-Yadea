@@ -6,13 +6,13 @@ enum YadeaKeyAction: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .up: "上移"
-        case .down: "下移"
-        case .left: "左滑 · 下一页"
-        case .right: "右滑 · 上一页"
-        case .select: "确认"
-        case .back: "返回"
-        case .home: "主页"
+        case .up: return CWL("拨轮向上")
+        case .down: return CWL("拨轮向下")
+        case .left: return CWL("上一页（左滑）")
+        case .right: return CWL("下一页（右滑）")
+        case .select: return CWL("确认")
+        case .back: return CWL("返回")
+        case .home: return CWL("主页")
         }
     }
 

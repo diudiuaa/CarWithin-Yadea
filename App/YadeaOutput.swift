@@ -3,6 +3,24 @@ import Darwin
 import Foundation
 import ImageIO
 
+/// 铺满全屏的取景参数。
+///
+/// 仪表回报的可投区比整块面板矮（800×384 vs 800×480），按「等比铺满 + 居中裁切」送整高，
+/// 再用这两个值微调：缩放决定画面放多大，偏移决定裁掉的上边多还是下边多。
+struct YadeaFraming: Equatable {
+    /// 100 = 刚好铺满目标框；< 100 画面缩小（四周留黑）；> 100 further 放大（裁掉更多）。
+    var scalePercent: Int = 100
+    /// -100 贴顶、0 居中、100 贴底。
+    var verticalPercent: Int = 0
+
+    static let scaleRange = 60...150
+    static let verticalRange = -100...100
+
+    var scaleFactor: CGFloat { CGFloat(scalePercent) / 100 }
+    /// 0…1：0 保留顶部（裁底部），0.5 上下均分，1 保留底部（裁顶部）。
+    var bias: CGFloat { CGFloat(verticalPercent + 100) / 200 }
+}
+
 /// 雅迪仪表投屏输出模块。
 ///
 /// 与九号/台铃/极核不同，雅迪走的是「TCP 8888 控制通道 + UDP 8889 图片通道」，
@@ -20,13 +38,19 @@ final class YadeaOutput {
     deinit { stop() }
 
     func start(localAddress: String, targetAddress: String, keyMap: YadeaKeyMap,
+               framing: YadeaFraming = YadeaFraming(),
                onState: @escaping (String) -> Void, onLog: @escaping (String) -> Void,
                onKey: @escaping (YadeaKeyAction) -> Void, requestKeyframe: @escaping () -> Void) {
         stop()
-        let next = Session(queue: queue, keyMap: keyMap, onState: onState, onLog: onLog,
+        let next = Session(queue: queue, keyMap: keyMap, framing: framing, onState: onState, onLog: onLog,
                            onKey: onKey, requestKeyframe: requestKeyframe)
         session = next
         queue.async { next.start(localAddress, targetAddress) }
+    }
+
+    /// 设置页拖动滑块时实时生效，不必重连。
+    func updateFraming(_ framing: YadeaFraming) {
+        session?.updateFraming(framing)
     }
 
     func append(_ data: Data, codec: VideoCodec, keyframe: Bool) {
@@ -44,6 +68,8 @@ final class YadeaOutput {
     private final class Session: @unchecked Sendable {
         let queue: DispatchQueue
         let keyMap: YadeaKeyMap
+        /// 只在 `queue` 上读写。
+        private var framing: YadeaFraming
         let onState: (String) -> Void
         let onLog: (String) -> Void
         let onKey: (YadeaKeyAction) -> Void
@@ -92,15 +118,25 @@ final class YadeaOutput {
         private var phase = Phase.connecting
         private var negotiatedAt = 0.0
 
-        init(queue: DispatchQueue, keyMap: YadeaKeyMap, onState: @escaping (String) -> Void,
+        init(queue: DispatchQueue, keyMap: YadeaKeyMap, framing: YadeaFraming,
+             onState: @escaping (String) -> Void,
              onLog: @escaping (String) -> Void, onKey: @escaping (YadeaKeyAction) -> Void,
              requestKeyframe: @escaping () -> Void) {
             self.queue = queue
             self.keyMap = keyMap
+            self.framing = framing
             self.onState = onState
             self.onLog = onLog
             self.onKey = onKey
             self.requestKeyframe = requestKeyframe
+        }
+
+        func updateFraming(_ framing: YadeaFraming) {
+            queue.async { [weak self] in
+                guard let self, self.framing != framing else { return }
+                self.framing = framing
+                self.fresh = true
+            }
         }
 
         func start(_ local: String, _ target: String) {
@@ -321,7 +357,8 @@ final class YadeaOutput {
             phase = .running
             nextFrameAt = now
             nextHeartbeat = now
-            report("正在投屏 · \(navConfig.width)×\(panelHeight)（全屏实验）· JPEG")
+            let zoom = framing.scalePercent == 100 ? "" : " · 缩放 \(framing.scalePercent)%"
+            report("正在投屏 · \(navConfig.width)×\(panelHeight)（铺满）· JPEG\(zoom)")
         }
 
         private func runFrameAndHeartbeat(now: Double) {
@@ -373,29 +410,29 @@ final class YadeaOutput {
                 compositor.jpegRepresentation(of: source, colorSpace: colorSpace,
                     options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: CGFloat(quality) / 100])
             }
-            let fitted = fittedImage(CIImage(cvPixelBuffer: image), width: width, height: height)
+            let fitted = fittedImage(CIImage(cvPixelBuffer: image), width: width, height: height, framing: framing)
             // Auto 画质：大图用 72，超硬上限 80KB 时降质重试一次（YuRong 同款策略）
             if let first = jpeg(fitted, 72), first.count <= YadeaProtocol.imageHardLimit { return first }
             if let retried = jpeg(fitted, 64) { return retried }
             return nil
         }
 
-        /// 铺满目标区域后居中裁切，避免黑边。
+        /// 铺满目标区域后按取景参数裁切，避免黑边；滑块可微调缩放与上下位置。
         ///
-        /// 仪表屏是 800×384（≈2.08:1），而 CarPlay 请求的是 800×480（16:9），
+        /// 仪表屏可投区是 800×384（≈2.08:1），而 CarPlay 请求的是 800×480（16:9），
         /// 等比「适配」会在左右各留 80px 黑边（合计占宽 20%），观感很差。
-        /// 这里改为等比「填充」：先按铺满缩放，再居中裁掉上下多余部分，做到满屏。
-        private func fittedImage(_ source: CIImage, width: Int, height: Int) -> CIImage {
+        /// 这里按「填充」缩放（`max`）后再裁，基准比例就是铺满；缩放滑块在此基础上再放大或缩小，
+        /// 上下偏移滑块决定溢出的高度保留顶部还是底部。
+        private func fittedImage(_ source: CIImage, width: Int, height: Int, framing: YadeaFraming) -> CIImage {
             let w = CGFloat(width), h = CGFloat(height)
-            if abs(source.extent.width - w) < 1, abs(source.extent.height - h) < 1 { return source }
-            let scale = max(w / source.extent.width, h / source.extent.height)
+            let scale = max(w / source.extent.width, h / source.extent.height) * framing.scaleFactor
             let scaled = source.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-            // 多出来的高度怎么分配：0 = 全裁顶部（保留底部），1 = 全裁底部（保留顶部），0.5 = 上下均分
-            let overflow = scaled.extent.height - h
-            let bias: CGFloat = 0.5
+            let overflowY = scaled.extent.height - h
+            // 溢出时按偏移比例分配；缩得比目标框还小时（溢出为负）让它在垂直方向居中。
+            let offsetY = overflowY > 0 ? -overflowY * framing.bias : overflowY / 2
             let positioned = scaled.transformed(by: CGAffineTransform(
                 translationX: (w - scaled.extent.width) / 2,
-                y: -overflow * bias))
+                y: offsetY))
             let bounds = CGRect(x: 0, y: 0, width: w, height: h)
             return positioned.composited(over: CIImage(color: .black)).cropped(to: bounds)
         }

@@ -195,6 +195,9 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
     private let yadeaVerticalSlider = UISlider()
     private let yadeaVerticalLabel = UILabel()
     private var yadeaKeyFields: [YadeaKeyAction: UITextField] = [:]
+    /// 上车自动连接：App 打开后不必再手动点启动。
+    private let autoConnectSwitch = UISwitch()
+    private var didAutoConnect = false
     private func updateYadeaStatus(_ message: String) {
         yadeaStatus.text = message
         yadeaCardStatus.text = message
@@ -209,6 +212,35 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
             if !text.isEmpty { values[action.rawValue] = text }
         }
         return values
+    }
+
+    @objc private func autoConnectChanged() {
+        UserDefaults.standard.set(autoConnectSwitch.isOn, forKey: "autoConnect")
+        log(autoConnectSwitch.isOn ? CWL("已开启上车自动连接") : CWL("已关闭上车自动连接"))
+    }
+
+    /// 冷启动后自动开始：只对仪表类输出生效，且每次启动只自动尝试一次。
+    private func autoConnectIfNeeded() {
+        guard !didAutoConnect else { return }
+        guard (UserDefaults.standard.object(forKey: "autoConnect") as? Bool) ?? true else { return }
+        guard !running, !waitingForNetwork, identity != nil, outputMode.usesInstrumentWiFi else { return }
+        didAutoConnect = true
+        log(CWL("上车自动连接：已按上次的输出方式自动启动 CarPlay"))
+        toggleReceiver()
+    }
+
+    /// 供快捷指令调用：carwithin://start
+    @objc private func handleAutoStartRequest() {
+        guard !running, !waitingForNetwork else { return }
+        guard identity != nil else {
+            log(CWL("自动连接请求已忽略：尚未载入 MFI 身份"))
+            return
+        }
+        didAutoConnect = true
+        view.endEditing(true)
+        refreshNetworkAddresses()
+        log(CWL("收到 carwithin://start，正在启动 CarPlay"))
+        toggleReceiver()
     }
     private let ninebotCard = UIStackView()
     private var ninebotCardInstructions: UILabel?
@@ -374,6 +406,9 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         if !running { modeChanged() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            self?.autoConnectIfNeeded()
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             self?.checkForUpdates(manual: false)
         }
@@ -420,6 +455,8 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         navigationItem.rightBarButtonItem = UIBarButtonItem(image: UIImage(systemName: "gearshape.fill"), style: .plain, target: self, action: #selector(toggleSettings))
         navigationItem.rightBarButtonItem?.accessibilityLabel = CWL("设置")
         locationManager.delegate = self
+        NotificationCenter.default.addObserver(self, selector: #selector(handleAutoStartRequest),
+                                               name: .carwithinAutoStart, object: nil)
         heading.font = .systemFont(ofSize: 32, weight: .bold)
         heading.numberOfLines = 0
 
@@ -2241,6 +2278,9 @@ extension ReceiverViewController {
         yadeaAddressField.keyboardType = .decimalPad
         yadeaAddressField.addTarget(self, action: #selector(saveHeadUnitOutput), for: .editingDidEnd)
 
+        autoConnectSwitch.isOn = defaults.object(forKey: "autoConnect") as? Bool ?? true
+        autoConnectSwitch.addTarget(self, action: #selector(autoConnectChanged), for: .valueChanged)
+
         yadeaScaleSlider.minimumValue = Float(YadeaFraming.scaleRange.lowerBound)
         yadeaScaleSlider.maximumValue = Float(YadeaFraming.scaleRange.upperBound)
         let savedScale = defaults.object(forKey: "yadeaScalePercent") as? Int ?? 100
@@ -2966,9 +3006,12 @@ extension ReceiverViewController {
             case .yadea:
                 var statusRows: [SettingsRow] = [
                     .field(CWL("仪表 IP 地址"), yadeaAddressField, placeholder: "留空自动取网关 .1"),
+                    .control(CWL("上车自动连接"), icon: ("bolt.car", .systemBlue), autoConnectSwitch),
                     .info(CWL("投屏规格"), "800×480 · JPEG · 最高 10 FPS"),
                     .note(yadeaStatus)
                 ]
+                statusRows.append(.guide(CWL("自动连接怎么用"), icon: ("arrow.triangle.2.circlepath", .systemBlue),
+                    CWL("开启后，打开 App 就会按上次的输出方式自动启动，不用再点按钮；仪表断电、Wi-Fi 切换后会自动重连，不用重启 CarPlay。想做到「连上仪表 Wi-Fi 就自动打开 App」，可在快捷指令里新建个人自动化：Wi-Fi 连接到仪表热点 → 打开 URL carwithin://start。")))
                 statusRows.append(.guide(CWL("按键怎么填"), icon: ("keyboard", .systemBlue),
                     CWL("投屏时按一下车把按键，日志里会出现「仪表上行 1A 01 00」这样的十六进制串，把它填进下面「仪表按键」对应动作，改完立即生效。")))
                 let keyRows = YadeaKeyAction.allCases.compactMap { action -> SettingsRow? in

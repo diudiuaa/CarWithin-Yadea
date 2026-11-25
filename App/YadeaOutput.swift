@@ -119,9 +119,13 @@ final class YadeaOutput {
         /// 实验：按整高投送，验证仪表是否支持把这两条半透明叠加在画面上。
         private let panelHeight = 480
 
-        private enum Phase { case connecting, negotiating, running }
+        private enum Phase { case connecting, negotiating, running, waiting }
         private var phase = Phase.connecting
         private var negotiatedAt = 0.0
+        /// 自动重连：仪表断电或 Wi-Fi 切换后不结束会话，退避重试直到重新接上。
+        private var attempt = 0
+        private var retryDelay = 2.0
+        private var retryAt = 0.0
 
         init(queue: DispatchQueue, keyMap: YadeaKeyMap, framing: YadeaFraming,
              onState: @escaping (String) -> Void,
@@ -149,12 +153,30 @@ final class YadeaOutput {
             localAddress = local
             targetAddress = target
             report("正在连接雅迪仪表…")
+            timer?.cancel()
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.schedule(deadline: .now(), repeating: .milliseconds(20), leeway: .milliseconds(5))
+            timer.setEventHandler { [weak self] in self?.tick() }
+            self.timer = timer
+            timer.resume()
+            beginAttempt()
+        }
+
+        /// 一次连接尝试。失败不结束会话，退到 waiting 相位等下一次 —— 车上电、Wi-Fi 恢复后自动接上。
+        private func beginAttempt() {
+            guard active, !targetAddress.isEmpty else { return }
+            closeSockets()
+            // Wi-Fi 可能已经切换（家里 ↔ 仪表热点），每次都用当前地址重建套接字。
+            if let current = ReceiverConfiguration.wifiIPv4Address() { localAddress = current }
             do {
-                udp = try NinebotUDPSocket(localIP: local, localPort: 0, remoteIP: target, remotePort: YadeaProtocol.imagePort)
+                udp = try NinebotUDPSocket(localIP: localAddress, localPort: 0,
+                                           remoteIP: targetAddress, remotePort: YadeaProtocol.imagePort)
                 let control = YadeaTCPSocket()
-                try control.connect(remoteIP: target, port: YadeaProtocol.controlPort)
+                try control.connect(remoteIP: targetAddress, port: YadeaProtocol.controlPort)
                 tcp = control
-                onLog("雅迪：TCP 8888 控制 + UDP 8889 图片 · JPEG 分片")
+                onLog(attempt == 0
+                      ? "雅迪：TCP 8888 控制 + UDP 8889 图片 · JPEG 分片"
+                      : "雅迪：已重新连上仪表（第 \(attempt) 次尝试）")
                 // 启动序列：HEARTBEAT + NAV_START 合并一条 TCP 发送
                 let startup = YadeaProtocol.buildFullFrame(type: YadeaProtocol.cmdHeartbeat,
                                                            payload: YadeaProtocol.buildHeartbeatPayload())
@@ -163,14 +185,24 @@ final class YadeaOutput {
                 try control.write(YadeaProtocol.data(startup))
                 phase = .negotiating
                 negotiatedAt = ProcessInfo.processInfo.systemUptime
-                report("已发送握手命令，等待仪表回应…")
+                report(attempt == 0 ? "已发送握手命令，等待仪表回应…" : "已重新握手，等待仪表回应…")
+                attempt += 1
+                retryDelay = 2
+            } catch {
+                fail(error)
+            }
+        }
 
-                let timer = DispatchSource.makeTimerSource(queue: queue)
-                timer.schedule(deadline: .now(), repeating: .milliseconds(20), leeway: .milliseconds(5))
-                timer.setEventHandler { [weak self] in self?.tick() }
-                self.timer = timer
-                timer.resume()
-            } catch { fail(error) }
+        /// 连不上或中途断开：不停止会话，按 2→15 秒退避重试。
+        private func scheduleRetry(_ error: Error?) {
+            phase = .waiting
+            closeSockets()
+            let now = ProcessInfo.processInfo.systemUptime
+            retryAt = now + retryDelay
+            if let error { onLog("雅迪输出中断：\(error.localizedDescription)") }
+            report("等待仪表上线 · \(Int(retryDelay)) 秒后重试（已尝试 \(attempt) 次）")
+            retryDelay = min(retryDelay * 1.6, 15)
+            attempt += 1
         }
 
         private var active: Bool { lock.withLock { !cancelled } }
@@ -263,6 +295,8 @@ final class YadeaOutput {
                 // 投屏期间也要持续收包：仪表可能在此时上报按键（车把按键 → CarPlay）。
                 drainIncoming()
                 runFrameAndHeartbeat(now: now)
+            case .waiting:
+                if now >= retryAt { beginAttempt() }
             }
         }
 
@@ -277,7 +311,8 @@ final class YadeaOutput {
                 }
                 flushDroppedBytes()
             } catch {
-                onLog("读取仪表响应失败：\(error.localizedDescription)")
+                // 仪表断电／Wi-Fi 断开：进入自动重连，而不是把整个会话结束掉。
+                scheduleRetry(error)
             }
         }
 
@@ -406,6 +441,7 @@ final class YadeaOutput {
 
         private func beginRunning(now: Double) {
             phase = .running
+            lock.withLock { acceptingFrames = true }
             nextFrameAt = now
             nextHeartbeat = now
             let zoom = framing.scalePercent == 100 ? "" : " · 缩放 \(framing.scalePercent)%"
@@ -471,6 +507,8 @@ final class YadeaOutput {
         /// 重开图片通道：先试原本机地址，再试 0.0.0.0（交给内核按路由选源地址）。
         private func rebuildUDP() -> Bool {
             guard !targetAddress.isEmpty else { return false }
+            // 换了 Wi-Fi 之后本机地址会变，重开前先取一次当前地址。
+            if let current = ReceiverConfiguration.wifiIPv4Address() { localAddress = current }
             for local in [localAddress, "0.0.0.0"] where !local.isEmpty {
                 if let socket = try? NinebotUDPSocket(localIP: local, localPort: 0,
                                                       remoteIP: targetAddress,
@@ -533,10 +571,7 @@ final class YadeaOutput {
         }
 
         private func fail(_ error: Error) {
-            let message = "雅迪输出失败：\(error.localizedDescription)"
-            onLog(message)
-            report(message)
-            close()
+            scheduleRetry(error)
         }
 
         func close() {
@@ -551,13 +586,23 @@ final class YadeaOutput {
                     onLog("已发送 NAV_END")
                 } catch {}
             }
+            closeSockets()
+        }
+
+        /// 只回收套接字与解码器，保留定时器和会话 —— 自动重连靠它在原地开新通道。
+        private func closeSockets() {
             tcp?.close()
             tcp = nil
             udp = nil
             rxBuffer.removeAll()
+            stallWaits = 0
+            lastWaitSize = 0
             decoder?.invalidate()
             decoder = nil
+            waitingForIDR = true
             latest = nil
+            fresh = false
+            lock.withLock { decoded = nil; decodeError = nil }
         }
     }
 }

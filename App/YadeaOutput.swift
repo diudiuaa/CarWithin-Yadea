@@ -19,10 +19,12 @@ final class YadeaOutput {
 
     deinit { stop() }
 
-    func start(localAddress: String, targetAddress: String, onState: @escaping (String) -> Void,
-               onLog: @escaping (String) -> Void, requestKeyframe: @escaping () -> Void) {
+    func start(localAddress: String, targetAddress: String, keyMap: YadeaKeyMap,
+               onState: @escaping (String) -> Void, onLog: @escaping (String) -> Void,
+               onKey: @escaping (YadeaKeyAction) -> Void, requestKeyframe: @escaping () -> Void) {
         stop()
-        let next = Session(queue: queue, onState: onState, onLog: onLog, requestKeyframe: requestKeyframe)
+        let next = Session(queue: queue, keyMap: keyMap, onState: onState, onLog: onLog,
+                           onKey: onKey, requestKeyframe: requestKeyframe)
         session = next
         queue.async { next.start(localAddress, targetAddress) }
     }
@@ -41,8 +43,10 @@ final class YadeaOutput {
 
     private final class Session: @unchecked Sendable {
         let queue: DispatchQueue
+        let keyMap: YadeaKeyMap
         let onState: (String) -> Void
         let onLog: (String) -> Void
+        let onKey: (YadeaKeyAction) -> Void
         let requestKeyframe: () -> Void
         private let lock = NSLock()
         private var cancelled = false
@@ -67,6 +71,13 @@ final class YadeaOutput {
         private var lastCodecFailure = -Double.infinity
 
         private var navConfig = NavDisplayConfig()
+        /// 同一动作的按下／抬起若各发一帧，150 毫秒内只认一次。
+        private var lastActionAt: [String: Double] = [:]
+        /// 已经打印过的上行帧，避免未知命令每秒刷屏。
+        private var seenTokens: Set<String> = []
+        /// 不符合标准帧头／帧尾而被丢弃的字节，用于发现「另一种封装」的按键上报。
+        private var droppedBytes: [UInt8] = []
+        private var lastDroppedLog = -Double.infinity
         private var imageSequence = 1
         private var nextHeartbeat = 0.0
         private var nextFrameAt = 0.0
@@ -81,11 +92,14 @@ final class YadeaOutput {
         private var phase = Phase.connecting
         private var negotiatedAt = 0.0
 
-        init(queue: DispatchQueue, onState: @escaping (String) -> Void, onLog: @escaping (String) -> Void,
+        init(queue: DispatchQueue, keyMap: YadeaKeyMap, onState: @escaping (String) -> Void,
+             onLog: @escaping (String) -> Void, onKey: @escaping (YadeaKeyAction) -> Void,
              requestKeyframe: @escaping () -> Void) {
             self.queue = queue
+            self.keyMap = keyMap
             self.onState = onState
             self.onLog = onLog
+            self.onKey = onKey
             self.requestKeyframe = requestKeyframe
         }
 
@@ -196,37 +210,76 @@ final class YadeaOutput {
             case .connecting:
                 break // start() 同步完成 TCP 连接后才进入 negotiating
             case .negotiating:
-                drainResponses()
+                drainIncoming()
                 if now - negotiatedAt > 4 {
                     // 未收到 0x20，按默认 800×480@10 继续（YuRong 同款兜底）
                     onLog("未收到 0x20 配置，使用默认 \(navConfig.summary)")
                     beginRunning(now: now)
                 }
             case .running:
+                // 投屏期间也要持续收包：仪表可能在此时上报按键（车把按键 → CarPlay）。
+                drainIncoming()
                 runFrameAndHeartbeat(now: now)
             }
         }
 
-        private func drainResponses() {
+        private func drainIncoming() {
             guard let tcp else { return }
             do {
                 while let chunk = try tcp.readSome(maxBytes: 4096, timeoutMs: 0) {
                     rxBuffer.append(contentsOf: YadeaProtocol.bytes(chunk))
                 }
                 while let frame = nextBufferedFrame() {
-                    let cmd = frame.type
-                    if cmd == YadeaProtocol.cmdNavStartResponse {
-                        navConfig = YadeaProtocol.parseNavDisplayConfig(frame.payload)
-                        onLog("协商成功：\(navConfig.summary)，capability=0x\(String(format: "%02X", navConfig.capabilities))")
-                        report("仪表已回应，正在投屏 · \(navConfig.summary)")
-                        beginRunning(now: ProcessInfo.processInfo.systemUptime)
-                    } else {
-                        onLog("收到命令 0x\(String(format: "%02X", Int(cmd)))（等待 0x20）")
-                    }
+                    handle(type: frame.type, payload: frame.payload)
                 }
+                flushDroppedBytes()
             } catch {
                 onLog("读取仪表响应失败：\(error.localizedDescription)")
             }
+        }
+
+        private func handle(type: UInt8, payload: [UInt8]) {
+            switch type {
+            case YadeaProtocol.cmdNavStartResponse:
+                navConfig = YadeaProtocol.parseNavDisplayConfig(payload)
+                onLog("协商成功：\(navConfig.summary)，capability=0x\(String(format: "%02X", navConfig.capabilities))")
+                report("仪表已回应，正在投屏 · \(navConfig.summary)")
+                beginRunning(now: ProcessInfo.processInfo.systemUptime)
+            case YadeaProtocol.cmdNavEndResponse, YadeaProtocol.cmdStatusResponse, YadeaProtocol.cmdRateResponse:
+                let token = YadeaKeyMap.token(type: type, payload: payload)
+                if seenTokens.insert(token).inserted { onLog("仪表上报 \(token)（结束／状态／帧率应答）") }
+            default:
+                handleUnmapped(type: type, payload: payload)
+            }
+        }
+
+        /// 把无法组成标准帧的字节集中报一次。仪表若用别的封装回传按键，会在这里露出来。
+        private func flushDroppedBytes() {
+            guard !droppedBytes.isEmpty else { return }
+            let sample = droppedBytes.prefix(16).map { String(format: "%02X", $0) }.joined(separator: " ")
+            let count = droppedBytes.count
+            droppedBytes.removeAll()
+            let now = ProcessInfo.processInfo.systemUptime
+            guard now - lastDroppedLog >= 3 else { return }
+            lastDroppedLog = now
+            let token = "RAW " + sample
+            guard seenTokens.insert(token).inserted else { return }
+            onLog("仪表原始数据 \(sample)（\(count) 字节，非标准帧）")
+        }
+
+        /// 未知命令：命中用户配置的按键映射就转成 CarPlay 动作，否则打印一次供用户填写。
+        private func handleUnmapped(type: UInt8, payload: [UInt8]) {
+            let token = YadeaKeyMap.token(type: type, payload: payload)
+            if let action = keyMap.match(type: type, payload: payload) {
+                let now = ProcessInfo.processInfo.systemUptime
+                if now - lastActionAt[action.rawValue, default: -1] < 0.15 { return }
+                lastActionAt[action.rawValue] = now
+                onLog("仪表按键 \(token) → \(action.title)")
+                onKey(action)
+                return
+            }
+            guard seenTokens.insert(token).inserted else { return }
+            onLog("仪表上行 \(token)（未映射：把这串填进「仪表按键」里对应动作即可）")
         }
 
         /// 从缓冲中扫描魔数 5944 解析出一帧，解析到即返回并移除。
@@ -238,14 +291,15 @@ final class YadeaOutput {
                     pos = i
                     break
                 }
-                guard pos >= 0 else { rxBuffer.removeAll(); return nil }
-                if pos > 0 { rxBuffer.removeFirst(pos) }
+                guard pos >= 0 else { noteDropped(rxBuffer[...]); rxBuffer.removeAll(); return nil }
+                if pos > 0 { noteDropped(rxBuffer[0..<pos]); rxBuffer.removeFirst(pos) }
                 guard rxBuffer.count >= 7 else { return nil }
                 let innerLen = Int(YadeaProtocol.readUInt32BE(rxBuffer, offset: 3))
                 guard innerLen >= 3, innerLen <= 1_048_576 else { rxBuffer.removeFirst(); continue }
                 let totalFrameLen = innerLen + 7
                 guard rxBuffer.count >= totalFrameLen else { return nil }
                 guard rxBuffer[totalFrameLen - 2] == 0x4B, rxBuffer[totalFrameLen - 1] == 0x4A else {
+                    noteDropped(rxBuffer[0..<1])
                     rxBuffer.removeFirst(); continue
                 }
                 let frame = Array(rxBuffer[0..<totalFrameLen])
@@ -255,6 +309,12 @@ final class YadeaOutput {
                 }
             }
             return nil
+        }
+
+        /// 汇总被丢弃的非帧字节（最多留 64 个，避免无限增长）。
+        private func noteDropped(_ bytes: ArraySlice<UInt8>) {
+            guard droppedBytes.count < 64 else { return }
+            droppedBytes.append(contentsOf: bytes.prefix(64 - droppedBytes.count))
         }
 
         private func beginRunning(now: Double) {

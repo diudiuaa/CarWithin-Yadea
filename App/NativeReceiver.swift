@@ -65,6 +65,8 @@ final class NativeReceiver {
     private let cfmoto62 = CfmotoOutput(name: "cfmoto62")
     var onCfmotoState: ((String) -> Void)?
     private let yadea = YadeaOutput()
+    /// 投屏期间顺手扫一遍 BLE，用来判断车把按键是走蓝牙还是走仪表那条 TCP。
+    private let yadeaBLE = YadeaBLEScanner()
     var onYadeaState: ((String) -> Void)?
     private let tailing = TailingOutput()
     var onTailingState: ((String) -> Void)?
@@ -161,6 +163,7 @@ final class NativeReceiver {
                         onLog: { [weak self] in self?.log($0) },
                         onKey: { [weak self] in self?.handleYadeaKey($0) },
                         requestKeyframe: { [weak self] in self?.requestKeyFrame(reason: CWL("雅迪解码恢复")) })
+                    self.yadeaBLE.start { [weak self] in self?.log($0) }
                 } else {
                     self.log(CWL("雅迪：无法推断仪表地址，请在输出设置里填写仪表 IP。"))
                 }
@@ -429,6 +432,7 @@ final class NativeReceiver {
         cfmoto5.stop()
         cfmoto62.stop()
         yadea.stop()
+        yadeaBLE.stop()
         tailing.stop()
         carLink.stop()
         #if DEBUG

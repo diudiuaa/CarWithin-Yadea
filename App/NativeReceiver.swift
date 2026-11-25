@@ -121,8 +121,10 @@ final class NativeReceiver {
             }
             if let target = configuration.yadeaAddress {
                 self.yadea.start(localAddress: configuration.address, targetAddress: target,
+                    keyMap: YadeaKeyMap(raw: configuration.yadeaKeyMap),
                     onState: { [weak self] in self?.onYadeaState?($0) },
                     onLog: { [weak self] in self?.log($0) },
+                    onKey: { [weak self] in self?.handleYadeaKey($0) },
                     requestKeyframe: { [weak self] in self?.requestKeyFrame(reason: "雅迪解码恢复") })
             }
             if configuration.carLifeEnabled {
@@ -248,16 +250,58 @@ final class NativeReceiver {
     func touches(source: String, _ points: [TouchPoint]) {
         queue.async { [weak self] in
             guard let self, let size = self.displaySize else { return }
-            let report = self.touchSlots.update(source: source, points: points)
-            guard !report.isEmpty else { return }
-            let contacts = report.map { entry in
-                CarPlayInfo.TouchContact(slot: entry.slot,
-                    x: UInt16(clamping: Int((min(max(entry.x, 0), 1) * Double(max(size.width - 1, 0))).rounded())),
-                    y: UInt16(clamping: Int((min(max(entry.y, 0), 1) * Double(max(size.height - 1, 0))).rounded())),
-                    down: entry.down)
-            }
-            self.activeMedia?.touch(contacts)
+            self.applyTouches(source: source, points, size: size)
         }
+    }
+
+    /// 车把／仪表按键 → CarPlay 动作。上下用旋钮滚轮，左右用合成滑动翻页。
+    private func handleYadeaKey(_ action: YadeaKeyAction) {
+        switch action {
+        case .up: press(.knobPrevious)
+        case .down: press(.knobNext)
+        case .select: press(.select)
+        case .back: press(.back)
+        case .home: press(.home)
+        case .left: swipePage(1)
+        case .right: swipePage(-1)
+        }
+    }
+
+    /// 合成一次水平拖动：分 6 步把手指从一侧移到另一侧再抬起，相当于手滑一下。
+    /// `page` 为 1 是「下一页」（内容向左走），-1 是「上一页」。
+    func swipePage(_ page: Int) {
+        queue.async { [weak self] in self?.swipePageOnQueue(page) }
+    }
+
+    private func swipePageOnQueue(_ page: Int) {
+        let start = page > 0 ? 0.86 : 0.14
+        let end = page > 0 ? 0.14 : 0.86
+        let steps = 6
+        let interval = 0.018
+        for step in 0...steps {
+            queue.asyncAfter(deadline: .now() + Double(step) * interval) { [weak self] in
+                guard let self, let size = self.displaySize else { return }
+                let ratio = Double(step) / Double(steps)
+                let point = TouchPoint(id: 1, x: start + (end - start) * ratio, y: 0.5)
+                self.applyTouches(source: "yadea-key", [point], size: size)
+            }
+        }
+        queue.asyncAfter(deadline: .now() + Double(steps + 1) * interval) { [weak self] in
+            guard let self, let size = self.displaySize else { return }
+            self.applyTouches(source: "yadea-key", [], size: size)
+        }
+    }
+
+    private func applyTouches(source: String, _ points: [TouchPoint], size: (width: Int, height: Int)) {
+        let report = touchSlots.update(source: source, points: points)
+        guard !report.isEmpty else { return }
+        let contacts = report.map { entry in
+            CarPlayInfo.TouchContact(slot: entry.slot,
+                x: UInt16(clamping: Int((min(max(entry.x, 0), 1) * Double(max(size.width - 1, 0))).rounded())),
+                y: UInt16(clamping: Int((min(max(entry.y, 0), 1) * Double(max(size.height - 1, 0))).rounded())),
+                down: entry.down)
+        }
+        activeMedia?.touch(contacts)
     }
     func press(_ control: CarPlayControl) {
         queue.async { [weak self] in

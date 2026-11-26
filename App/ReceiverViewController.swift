@@ -78,6 +78,17 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
     private var canDetectWiFiName: Bool { (Bundle.main.object(forInfoDictionaryKey: "TDSWiFiNameDetection") as? String) == "YES" }
     /// The settings sheet while it is shown.
     private weak var settingsNavigation: UINavigationController?
+    /// 底部功能栏：连接 / 设置 / 日志 三个页签。
+    private let tabBar = UIView()
+    private var tabButtons: [UIButton] = []
+    private var selectedTab = 0
+    /// 连接页的滚动容器，切页签时整体显隐。
+    private let connectScroll = UIScrollView()
+    /// 设置页与日志页的宿主视图，和连接页平级。
+    private let settingsHost = UIView()
+    private let logHost = UIView()
+    private let tabLogView = UITextView()
+    private var embeddedSettings: UINavigationController?
     private let transportProbeButton = UIButton(type: .system)
     private let orientationControl = ChoiceMenu(items: [CWL("横屏"), CWL("竖屏")])
     private let wifiPathMonitor = NWPathMonitor(requiredInterfaceType: .wifi)
@@ -809,14 +820,15 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         logView.heightAnchor.constraint(equalToConstant: 220).isActive = true
         transportProbeButton.addTarget(self, action: #selector(testSameDeviceTransport), for: .touchUpInside)
         stack.axis = .vertical; stack.spacing = 16; stack.translatesAutoresizingMaskIntoConstraints = false
-        let scroll = UIScrollView(); scroll.translatesAutoresizingMaskIntoConstraints = false
+        let scroll = connectScroll
+        scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.keyboardDismissMode = .interactive
         scroll.panGestureRecognizer.require(toFail: videoSurface.touchOwnershipGestureRecognizer)
         view.addSubview(scroll); scroll.addSubview(stack)
         let preferredWidth = stack.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor, constant: -48)
         preferredWidth.priority = UILayoutPriority(999)
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor), scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            scroll.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 24),
             stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -24),
@@ -824,6 +836,7 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
             preferredWidth, stack.widthAnchor.constraint(lessThanOrEqualTo: scroll.frameLayoutGuide.widthAnchor, constant: -48),
             stack.widthAnchor.constraint(lessThanOrEqualToConstant: 720)
         ])
+        buildTabBar(scroll)
         receiver.onLog = { [weak self] in self?.log($0) }; bluetooth.onLog = { [weak self] in self?.log($0) }
         receiver.onControlConnected = { [weak self] in self?.sameDevice.didConnectControl() }
         receiver.onVideo = { [weak self] data, codec in
@@ -2230,6 +2243,10 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
             logView.text = lines.joined(separator: "\n")
             if !logView.text.isEmpty { logView.scrollRangeToVisible(NSRange(location: logView.text.utf16.count - 1, length: 1)) }
         }
+        if tabLogView.window != nil {
+            tabLogView.text = lines.joined(separator: "\n")
+            if !tabLogView.text.isEmpty { tabLogView.scrollRangeToVisible(NSRange(location: tabLogView.text.utf16.count - 1, length: 1)) }
+        }
         NSLog("[CarWithin] %@", message)
     }
 }
@@ -2499,27 +2516,184 @@ extension ReceiverViewController {
     }
 
     /// Shows settings and, when needed, takes the user to the relevant connection settings.
-    func revealSettings(wifi: Bool = false, output: Bool = false) {
-        view.endEditing(true)
-        if let navigation = settingsNavigation {
-            if wifi, activeWiFiForm == nil {
-                navigation.popToRootViewController(animated: false)
-                navigation.pushViewController(wifiPage(), animated: true)
+    // MARK: - 底部功能栏
+
+    /// 三栏页签：连接 / 设置 / 日志。
+    private func buildTabBar(_ connect: UIScrollView) {
+        tabBar.translatesAutoresizingMaskIntoConstraints = false
+        tabBar.backgroundColor = .systemBackground
+
+        let hairline = UIView()
+        hairline.backgroundColor = .separator
+        hairline.translatesAutoresizingMaskIntoConstraints = false
+        tabBar.addSubview(hairline)
+
+        let row = UIStackView()
+        row.axis = .horizontal
+        row.distribution = .fillEqually
+        row.translatesAutoresizingMaskIntoConstraints = false
+        tabBar.addSubview(row)
+
+        let items: [(String, String)] = [
+            ("point.3.connected.trianglepath.dotted", CWL("连接")),
+            ("slider.horizontal.3", CWL("设置")),
+            ("doc.text", CWL("日志"))
+        ]
+        for (index, item) in items.enumerated() {
+            var configuration = UIButton.Configuration.plain()
+            configuration.image = UIImage(systemName: item.0)
+            configuration.title = item.1
+            configuration.imagePlacement = .top
+            configuration.imagePadding = 3
+            configuration.contentInsets = NSDirectionalEdgeInsets(top: 7, leading: 4, bottom: 4, trailing: 4)
+            configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+                var outgoing = incoming
+                outgoing.font = UIFont.systemFont(ofSize: 10.5, weight: .medium)
+                return outgoing
             }
-            return
+            let button = UIButton(configuration: configuration)
+            button.tag = index
+            button.addAction(UIAction { [weak self] _ in self?.selectTab(index) }, for: .touchUpInside)
+            row.addArrangedSubview(button)
+            tabButtons.append(button)
         }
+
+        [settingsHost, logHost].forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+            $0.backgroundColor = .systemGroupedBackground
+            $0.isHidden = true
+            view.addSubview($0)
+        }
+        view.addSubview(tabBar)
+
+        NSLayoutConstraint.activate([
+            tabBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            tabBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            tabBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            tabBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -50),
+            hairline.topAnchor.constraint(equalTo: tabBar.topAnchor),
+            hairline.leadingAnchor.constraint(equalTo: tabBar.leadingAnchor),
+            hairline.trailingAnchor.constraint(equalTo: tabBar.trailingAnchor),
+            hairline.heightAnchor.constraint(equalToConstant: 0.5),
+            row.topAnchor.constraint(equalTo: tabBar.topAnchor),
+            row.leadingAnchor.constraint(equalTo: tabBar.leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: tabBar.trailingAnchor),
+            row.heightAnchor.constraint(equalToConstant: 50),
+            connect.bottomAnchor.constraint(equalTo: tabBar.topAnchor),
+            settingsHost.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            settingsHost.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            settingsHost.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            settingsHost.bottomAnchor.constraint(equalTo: tabBar.topAnchor),
+            logHost.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            logHost.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            logHost.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            logHost.bottomAnchor.constraint(equalTo: tabBar.topAnchor)
+        ])
+
+        // 日志页：顶部标题栏 + 整页只读文本，和首页日志共用一份内容。
+        let logHeader = UIView()
+        logHeader.translatesAutoresizingMaskIntoConstraints = false
+        let logTitle = UILabel()
+        logTitle.text = CWL("运行日志")
+        logTitle.font = .systemFont(ofSize: 17, weight: .semibold)
+        logTitle.translatesAutoresizingMaskIntoConstraints = false
+        let logClear = UIButton(type: .system)
+        logClear.setTitle(CWL("清空"), for: .normal)
+        logClear.titleLabel?.font = .systemFont(ofSize: 15)
+        logClear.translatesAutoresizingMaskIntoConstraints = false
+        logClear.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            self.lines.removeAll()
+            self.tabLogView.text = ""
+            self.logView.text = ""
+        }, for: .touchUpInside)
+        logHeader.addSubview(logTitle)
+        logHeader.addSubview(logClear)
+        logHost.addSubview(logHeader)
+
+        tabLogView.translatesAutoresizingMaskIntoConstraints = false
+        tabLogView.isEditable = false
+        tabLogView.alwaysBounceVertical = true
+        tabLogView.backgroundColor = .systemGroupedBackground
+        tabLogView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        tabLogView.textColor = .label
+        tabLogView.textContainerInset = UIEdgeInsets(top: 16, left: 14, bottom: 24, right: 14)
+        tabLogView.text = lines.joined(separator: "\n")
+        logHost.addSubview(tabLogView)
+        NSLayoutConstraint.activate([
+            logHeader.topAnchor.constraint(equalTo: logHost.topAnchor),
+            logHeader.leadingAnchor.constraint(equalTo: logHost.leadingAnchor),
+            logHeader.trailingAnchor.constraint(equalTo: logHost.trailingAnchor),
+            logHeader.heightAnchor.constraint(equalToConstant: 46),
+            logTitle.leadingAnchor.constraint(equalTo: logHeader.leadingAnchor, constant: 18),
+            logTitle.centerYAnchor.constraint(equalTo: logHeader.centerYAnchor),
+            logClear.trailingAnchor.constraint(equalTo: logHeader.trailingAnchor, constant: -18),
+            logClear.centerYAnchor.constraint(equalTo: logHeader.centerYAnchor),
+            tabLogView.topAnchor.constraint(equalTo: logHeader.bottomAnchor),
+            tabLogView.bottomAnchor.constraint(equalTo: logHost.bottomAnchor),
+            tabLogView.leadingAnchor.constraint(equalTo: logHost.leadingAnchor),
+            tabLogView.trailingAnchor.constraint(equalTo: logHost.trailingAnchor)
+        ])
+
+        selectTab(0)
+    }
+
+    /// 切换页签，同时把设置页按需内嵌进来。
+    private func selectTab(_ index: Int) {
+        let leavingSettings = selectedTab == 1 && index != 1
+        selectedTab = index
+        if index == 1 { ensureSettingsEmbedded() }
+        connectScroll.isHidden = index != 0
+        settingsHost.isHidden = index != 1
+        logHost.isHidden = index != 2
+        for (position, button) in tabButtons.enumerated() {
+            let on = position == index
+            button.configuration?.baseForegroundColor = on ? .label : .tertiaryLabel
+        }
+        if index != 1 { view.endEditing(true) }
+        navigationController?.setNavigationBarHidden(index != 0, animated: false)
+        if index == 2 {
+            tabLogView.text = lines.joined(separator: "\n")
+            let end = tabLogView.text.utf16.count
+            if end > 0 { tabLogView.scrollRangeToVisible(NSRange(location: end - 1, length: 1)) }
+        }
+        if leavingSettings { settingsDismissed() }
+    }
+
+    /// 把设置页作为子控制器嵌进第二个页签。
+    private func ensureSettingsEmbedded() {
+        guard embeddedSettings == nil else { return }
         let root = rootSettingsPage()
         let navigation = UINavigationController(rootViewController: root)
         navigation.navigationBar.prefersLargeTitles = false
-        root.navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak self] _ in
-            self?.settingsNavigation?.view.endEditing(true)
-            self?.settingsNavigation?.dismiss(animated: true) { self?.settingsDismissed() }
-        })
-        navigation.presentationController?.delegate = self
-        if wifi { navigation.pushViewController(wifiPage(), animated: false) }
-        if output { navigation.pushViewController(headUnitPage(), animated: false) }
+        navigation.view.translatesAutoresizingMaskIntoConstraints = false
+        addChild(navigation)
+        settingsHost.addSubview(navigation.view)
+        NSLayoutConstraint.activate([
+            navigation.view.topAnchor.constraint(equalTo: settingsHost.topAnchor),
+            navigation.view.bottomAnchor.constraint(equalTo: settingsHost.bottomAnchor),
+            navigation.view.leadingAnchor.constraint(equalTo: settingsHost.leadingAnchor),
+            navigation.view.trailingAnchor.constraint(equalTo: settingsHost.trailingAnchor)
+        ])
+        navigation.didMove(toParent: self)
+        embeddedSettings = navigation
         settingsNavigation = navigation
-        present(navigation, animated: true)
+    }
+
+    func revealSettings(wifi: Bool = false, output: Bool = false) {
+        view.endEditing(true)
+        ensureSettingsEmbedded()
+        selectTab(1)
+        guard let navigation = embeddedSettings else { return }
+        if wifi, activeWiFiForm == nil {
+            navigation.popToRootViewController(animated: false)
+            navigation.pushViewController(wifiPage(), animated: true)
+            return
+        }
+        if output {
+            navigation.popToRootViewController(animated: false)
+            navigation.pushViewController(headUnitPage(), animated: false)
+        }
     }
 
     fileprivate func settingsDismissed() {
@@ -2621,7 +2795,7 @@ extension ReceiverViewController {
                 try Task.checkCancellation()
                 guard UIApplication.shared.applicationState == .active else { return }
                 if manual {
-                    guard self.settingsNavigation?.viewIfLoaded?.window != nil else { return }
+                    guard (self.selectedTab == 1 && self.settingsNavigation != nil) else { return }
                     AppUpdatePolicy().succeeded()
                     self.showVersionDetails(release, automatic: false)
                 } else {
@@ -2634,7 +2808,7 @@ extension ReceiverViewController {
             } catch {
                 guard !Task.isCancelled else { return }
                 AppUpdatePolicy().failed()
-                if manual, self.settingsNavigation?.viewIfLoaded?.window != nil {
+                if manual, (self.selectedTab == 1 && self.settingsNavigation != nil) {
                     self.alert(CWL("检查更新失败"), error.localizedDescription)
                 }
             }

@@ -152,7 +152,7 @@ final class YadeaOutput {
             guard active else { return }
             localAddress = local
             targetAddress = target
-            report("正在连接雅迪仪表…")
+            report("正在连接熊猫仪表…")
             timer?.cancel()
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now(), repeating: .milliseconds(20), leeway: .milliseconds(5))
@@ -175,8 +175,8 @@ final class YadeaOutput {
                 try control.connect(remoteIP: targetAddress, port: YadeaProtocol.controlPort)
                 tcp = control
                 onLog(attempt == 0
-                      ? "雅迪：TCP 8888 控制 + UDP 8889 图片 · JPEG 分片"
-                      : "雅迪：已重新连上仪表（第 \(attempt) 次尝试）")
+                      ? "熊猫：TCP 8888 控制 + UDP 8889 图片 · JPEG 分片"
+                      : "熊猫：已重新连上仪表（第 \(attempt) 次尝试）")
                 // 启动序列：HEARTBEAT + NAV_START 合并一条 TCP 发送
                 let startup = YadeaProtocol.buildFullFrame(type: YadeaProtocol.cmdHeartbeat,
                                                            payload: YadeaProtocol.buildHeartbeatPayload())
@@ -199,7 +199,7 @@ final class YadeaOutput {
             closeSockets()
             let now = ProcessInfo.processInfo.systemUptime
             retryAt = now + retryDelay
-            if let error { onLog("雅迪输出中断：\(error.localizedDescription)") }
+            if let error { onLog("熊猫输出中断：\(error.localizedDescription)") }
             report("等待仪表上线 · \(Int(retryDelay)) 秒后重试（已尝试 \(attempt) 次）")
             retryDelay = min(retryDelay * 1.6, 15)
             attempt += 1
@@ -490,7 +490,7 @@ final class YadeaOutput {
                 // 网络切换（家里换公司、切热点、后台回来）后旧的 UDP socket 还绑在失效的本机地址上，
                 // 发送会直接返回 EADDRNOTAVAIL(49)。这里原地重开图片通道，不用手动重连。
                 if isAddressLost(error), rebuildUDP() {
-                    onLog("雅迪：本机地址已变化，已重开图片通道，继续投屏")
+                    onLog("熊猫：本机地址已变化，已重开图片通道，继续投屏")
                     nextFrameAt = now + Double(navConfig.frameIntervalMs) / 1000.0
                     return
                 }
@@ -557,7 +557,7 @@ final class YadeaOutput {
 
         private func logCodecFailure(_ stage: String, _ error: Error) {
             let now = ProcessInfo.processInfo.systemUptime
-            if now - lastCodecFailure > 4 { onLog("雅迪\(stage)恢复：\(error.localizedDescription)") }
+            if now - lastCodecFailure > 4 { onLog("熊猫\(stage)恢复：\(error.localizedDescription)") }
             lastCodecFailure = now
         }
 

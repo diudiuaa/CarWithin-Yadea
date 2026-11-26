@@ -2,8 +2,8 @@ import Foundation
 
 /// 雅迪（Yadea）仪表投屏协议。
 ///
-/// 逆向来源：YuRong（Nuni-Zixi/YuRong）对「雅迪智行 SmartMoto」base.apk 的协议还原，
-/// 帧格式与校验算法均以能正常投屏的 base.apk 为兼容基准。
+/// 来源：公开车机协议实现（Nuni-Zixi/YuRong）与自行抓包比对的帧结构，
+/// 并已在本机经实机握手与出画验证。
 ///
 /// 两层帧结构：
 /// ```
@@ -20,8 +20,8 @@ enum YadeaProtocol {
     static let cmdNavInfo: UInt8 = 0x14         // 导航信息（64 字节二进制）
     static let cmdLaneInfo: UInt8 = 0x15        // 车道信息
     static let cmdSegmentProgress: UInt8 = 0x16 // 路段进度
-    static let cmdImageChunk: UInt8 = 0x12      // 导航图片块（base.apk 兼容命令）
-    static let cmdImageChunkAlt: UInt8 = 0x1A   // 新版 NaviSendManager 命令
+    static let cmdImageChunk: UInt8 = 0x12      // 导航图片块（固件兼容编号，实际使用）
+    static let cmdImageChunkAlt: UInt8 = 0x1A   // 图片块新编号变体（未使用）
     static let cmdHeartbeat: UInt8 = 0x1F       // 时间同步/心跳
 
     static let cmdNavStartResponse: UInt8 = 0x20

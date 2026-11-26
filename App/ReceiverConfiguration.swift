@@ -192,11 +192,11 @@ struct ReceiverConfiguration {
                   !yadeaAddress.hasPrefix("127."), !yadeaAddress.hasPrefix("0."),
                   !yadeaAddress.hasPrefix("169.254."), UInt32(bigEndian: target.s_addr) < 0xe0000000,
                   !yadeaAddress.hasSuffix(".255") else {
-                throw ConfigurationError("请输入雅迪仪表真实的 IPv4 地址，留空则自动取网关 .1。")
+                throw ConfigurationError("请输入熊猫仪表真实的 IPv4 地址，留空则自动取网关 .1。")
             }
         }
         guard (60...150).contains(yadeaScalePercent), (-100...100).contains(yadeaVerticalPercent) else {
-            throw ConfigurationError("雅迪画面缩放或上下偏移超出范围。")
+            throw ConfigurationError("熊猫画面缩放或上下偏移超出范围。")
         }
         if let tailingAddress {
             var target = in_addr()

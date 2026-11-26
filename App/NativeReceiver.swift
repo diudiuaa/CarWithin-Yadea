@@ -162,10 +162,10 @@ final class NativeReceiver {
                         onState: { [weak self] in self?.onYadeaState?($0) },
                         onLog: { [weak self] in self?.log($0) },
                         onKey: { [weak self] in self?.handleYadeaKey($0) },
-                        requestKeyframe: { [weak self] in self?.requestKeyFrame(reason: CWL("雅迪解码恢复")) })
+                        requestKeyframe: { [weak self] in self?.requestKeyFrame(reason: CWL("熊猫解码恢复")) })
                     self.yadeaBLE.start { [weak self] in self?.log($0) }
                 } else {
-                    self.log(CWL("雅迪：无法推断仪表地址，请在输出设置里填写仪表 IP。"))
+                    self.log(CWL("熊猫：无法推断仪表地址，请在输出设置里填写仪表 IP。"))
                 }
             }
             if let target = configuration.ninebotAddress {

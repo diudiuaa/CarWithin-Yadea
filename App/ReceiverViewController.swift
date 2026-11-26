@@ -198,6 +198,53 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
     /// 上车自动连接：App 打开后不必再手动点启动。
     private let autoConnectSwitch = UISwitch()
     private var didAutoConnect = false
+    /// 首页输出芯片网格与「已记住车机」提示条。
+    private let outputChips = OutputChipGridView()
+    private let rememberedBar = UIStackView()
+    private let rememberedTitle = UILabel()
+    private let rememberedDetail = UILabel()
+    private static let rememberedVehicleKey = "rememberedVehicleName"
+    private static let lastConnectedKey = "lastConnectedAt"
+    private var rememberedVehicleName: String? {
+        UserDefaults.standard.string(forKey: Self.rememberedVehicleKey)
+    }
+    private var lastConnectedAt: Date? {
+        (UserDefaults.standard.object(forKey: Self.lastConnectedKey) as? Double).map { Date(timeIntervalSince1970: $0) }
+    }
+    private var lastConnectedText: String? {
+        guard let date = lastConnectedAt else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        if Calendar.current.isDateInToday(date) { formatter.dateFormat = "今天 HH:mm" }
+        else if Calendar.current.isDateInYesterday(date) { formatter.dateFormat = "昨天 HH:mm" }
+        else { formatter.dateFormat = "M月d日 HH:mm" }
+        return formatter.string(from: date)
+    }
+    /// 连上并出画面后记住这台车机，下次开机直接接管。
+    private func rememberVehicle() {
+        let ssid = (ssidField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        UserDefaults.standard.set(ssid.isEmpty ? outputMode.title : ssid, forKey: Self.rememberedVehicleKey)
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastConnectedKey)
+        refreshRememberedState()
+    }
+    private func forgetVehicle() {
+        UserDefaults.standard.removeObject(forKey: Self.rememberedVehicleKey)
+        UserDefaults.standard.removeObject(forKey: Self.lastConnectedKey)
+        refreshRememberedState()
+        reloadVisibleSettings()
+    }
+    private func refreshRememberedState() {
+        let auto = (UserDefaults.standard.object(forKey: "autoConnect") as? Bool) ?? true
+        outputChips.selectedIndex = headUnitOutput.selectedSegmentIndex
+        guard let name = rememberedVehicleName else {
+            rememberedBar.isHidden = true
+            return
+        }
+        rememberedBar.isHidden = false
+        rememberedTitle.text = CWL("已记住 {1} · {2}", [name, auto ? CWL("开机自动连接") : CWL("仅手动启动")])
+        rememberedDetail.text = auto ? CWL("车机开机并发出投屏信号后自动启动，不用再点")
+            : CWL("自动连接已关闭，需要手动点启动")
+    }
     private func updateYadeaStatus(_ message: String) {
         yadeaStatus.text = message
         yadeaCardStatus.text = message
@@ -216,8 +263,12 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
 
     @objc private func autoConnectChanged() {
         UserDefaults.standard.set(autoConnectSwitch.isOn, forKey: "autoConnect")
-        log(autoConnectSwitch.isOn ? CWL("已开启上车自动连接") : CWL("已关闭上车自动连接"))
+        refreshRememberedState()
+        reloadVisibleSettings()
+        log(autoConnectSwitch.isOn ? CWL("已开启开机自动连接") : CWL("已关闭开机自动连接"))
     }
+
+    @objc private func openRememberedSettings() { revealSettings() }
 
     /// 冷启动后自动开始：只对仪表类输出生效，且每次启动只自动尝试一次。
     private func autoConnectIfNeeded() {
@@ -312,7 +363,7 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
             case .zeehoAE2: return CWL("极核 AE2 Pro 5 寸")
             case .cfmoto5: return CWL("春风 5 寸")
             case .cfmoto62: return CWL("春风 6.2 寸")
-            case .yadea: return CWL("雅迪 5 寸")
+            case .yadea: return CWL("熊猫 5 寸")
             }
         }
         var ninebotMode: NinebotOutput.Mode? {
@@ -457,7 +508,7 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         locationManager.delegate = self
         NotificationCenter.default.addObserver(self, selector: #selector(handleAutoStartRequest),
                                                name: .carwithinAutoStart, object: nil)
-        heading.font = .systemFont(ofSize: 32, weight: .bold)
+        heading.font = .systemFont(ofSize: 28, weight: .bold)
         heading.numberOfLines = 0
 
         explanation.font = .preferredFont(forTextStyle: .body); explanation.textColor = .secondaryLabel; explanation.numberOfLines = 0
@@ -487,14 +538,14 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         connectionHelp.textColor = .secondaryLabel; connectionHelp.numberOfLines = 0
         receiverPicker.configuration = .bordered(); receiverPicker.showsMenuAsPrimaryAction = true
         let heroIcon = UIImageView(image: UIImage(systemName: "car.side.fill"))
-        heroIcon.tintColor = .systemBlue
+        heroIcon.tintColor = .label
         heroIcon.contentMode = .scaleAspectFit
-        heroIcon.widthAnchor.constraint(equalToConstant: 48).isActive = true
-        heroIcon.heightAnchor.constraint(equalToConstant: 48).isActive = true
+        heroIcon.widthAnchor.constraint(equalToConstant: 34).isActive = true
+        heroIcon.heightAnchor.constraint(equalToConstant: 34).isActive = true
         let titleStack = UIStackView(arrangedSubviews: [heroIcon, heading])
-        titleStack.axis = .horizontal; titleStack.alignment = .center; titleStack.spacing = 14
+        titleStack.axis = .horizontal; titleStack.alignment = .center; titleStack.spacing = 12
         let statusIcon = UIImageView(image: UIImage(systemName: "circle.fill"))
-        statusIcon.tintColor = .systemBlue
+        statusIcon.tintColor = .systemGreen
         statusIcon.contentMode = .scaleAspectFit
         statusIcon.widthAnchor.constraint(equalToConstant: 9).isActive = true
         statusIcon.heightAnchor.constraint(equalToConstant: 9).isActive = true
@@ -502,19 +553,71 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         statusRow.axis = .horizontal; statusRow.alignment = .center; statusRow.spacing = 8
         statusRow.isLayoutMarginsRelativeArrangement = true
         statusRow.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12)
-        statusRow.backgroundColor = UIColor.systemBlue.withAlphaComponent(0.1)
+        statusRow.backgroundColor = .secondarySystemBackground
         statusRow.layer.cornerRadius = 12; statusRow.layer.cornerCurve = .continuous
         startupHint.font = .preferredFont(forTextStyle: .footnote)
         startupHint.textColor = .secondaryLabel
         startupHint.numberOfLines = 0
         startupHint.adjustsFontForContentSizeCategory = true
         startupHint.isHidden = true
-        let heroStack = UIStackView(arrangedSubviews: [titleStack, explanation, statusRow, startupHint, connectionHelp, receiverPicker, networkSummary])
+
+        // 已记住车机：连过一次后在这里显示自动连接状态，点一下进设置。
+        let shieldIcon = UIImageView(image: UIImage(systemName: "checkmark.shield.fill"))
+        shieldIcon.tintColor = .label
+        shieldIcon.contentMode = .scaleAspectFit
+        shieldIcon.widthAnchor.constraint(equalToConstant: 16).isActive = true
+        shieldIcon.heightAnchor.constraint(equalToConstant: 16).isActive = true
+        shieldIcon.setContentHuggingPriority(.required, for: .horizontal)
+        rememberedTitle.font = .preferredFont(forTextStyle: .footnote)
+        rememberedTitle.textColor = .label
+        rememberedTitle.adjustsFontForContentSizeCategory = true
+        rememberedTitle.numberOfLines = 0
+        rememberedDetail.font = .preferredFont(forTextStyle: .caption2)
+        rememberedDetail.textColor = .secondaryLabel
+        rememberedDetail.adjustsFontForContentSizeCategory = true
+        rememberedDetail.numberOfLines = 0
+        let rememberedText = UIStackView(arrangedSubviews: [rememberedTitle, rememberedDetail])
+        rememberedText.axis = .vertical; rememberedText.spacing = 2
+        rememberedBar.addArrangedSubview(shieldIcon)
+        rememberedBar.addArrangedSubview(rememberedText)
+        rememberedBar.axis = .horizontal; rememberedBar.alignment = .top; rememberedBar.spacing = 10
+        rememberedBar.isLayoutMarginsRelativeArrangement = true
+        rememberedBar.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 11, leading: 14, bottom: 11, trailing: 14)
+        rememberedBar.backgroundColor = .secondarySystemBackground
+        rememberedBar.layer.cornerRadius = 14; rememberedBar.layer.cornerCurve = .continuous
+        rememberedBar.isHidden = true
+        rememberedBar.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(openRememberedSettings)))
+
+        // 当前输出：首页直接换品牌，不必再进设置。
+        let outputCaption = UILabel()
+        outputCaption.text = CWL("当前输出")
+        outputCaption.font = .preferredFont(forTextStyle: .caption1)
+        outputCaption.textColor = .secondaryLabel
+        outputCaption.adjustsFontForContentSizeCategory = true
+        outputChips.configure(titles: HeadUnitOutput.menuOrder.map(\.title))
+        outputChips.selectedIndex = HeadUnitOutput.menuOrder.firstIndex(of: outputMode) ?? 0
+        outputChips.onSelect = { [weak self] index in
+            guard let self, HeadUnitOutput.menuOrder.indices.contains(index),
+                  self.headUnitOutput.selectedSegmentIndex != index else { return }
+            self.headUnitOutput.selectedSegmentIndex = index
+            self.headUnitOutputChanged()
+        }
+        let outputSection = UIStackView(arrangedSubviews: [outputCaption, outputChips])
+        outputSection.axis = .vertical; outputSection.spacing = 8
+
+        let stepsLabel = UILabel()
+        stepsLabel.text = CWL("1 连 Wi-Fi　2 选输出　3 启动")
+        stepsLabel.font = .preferredFont(forTextStyle: .caption1)
+        stepsLabel.textColor = .tertiaryLabel
+        stepsLabel.adjustsFontForContentSizeCategory = true
+
+        let heroStack = UIStackView(arrangedSubviews: [titleStack, explanation, statusRow, rememberedBar, startupHint,
+                                                       outputSection, connectionHelp, receiverPicker, networkSummary, stepsLabel])
         heroStack.axis = .vertical; heroStack.spacing = 14
         heroStack.isLayoutMarginsRelativeArrangement = true
-        heroStack.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 22, leading: 20, bottom: 22, trailing: 20)
+        heroStack.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 20, leading: 18, bottom: 20, trailing: 18)
         heroStack.backgroundColor = .secondarySystemGroupedBackground
-        heroStack.layer.cornerRadius = 24; heroStack.layer.cornerCurve = .continuous
+        heroStack.layer.cornerRadius = 22; heroStack.layer.cornerCurve = .continuous
         let stack = UIStackView(arrangedSubviews: [heroStack])
         configureSettingsControls()
         if #available(iOS 17.0, *) {
@@ -529,6 +632,8 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         startButton.configuration?.image = UIImage(systemName: "play.fill")
         startButton.configuration?.imagePadding = 8
         startButton.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 18, leading: 24, bottom: 18, trailing: 24)
+        startButton.configuration?.baseBackgroundColor = .label
+        startButton.configuration?.baseForegroundColor = .systemBackground
         heroStack.addArrangedSubview(startButton)
 
         let browserIcon = UIImageView(image: UIImage(systemName: "globe"))
@@ -612,8 +717,8 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         cfmotoSettings.addAction(UIAction { [weak self] _ in self?.revealSettings(output: true) }, for: .touchUpInside)
         cfmotoCard.addArrangedSubview(cfmotoSettings)
         stack.addArrangedSubview(cfmotoCard)
-        configureConnectionCard(yadeaCard, title: CWL("雅迪仪表连接"), symbol: "scooter", color: .systemBlue,
-            instructions: CWL("让 iPhone 加入雅迪仪表 Wi-Fi，在仪表上进入投屏界面后启动 CarPlay。画面按铺满整块面板发送，可在设置里用滑块微调缩放与上下位置；车把按键可在设置里映射成翻页、确认和返回。"),
+        configureConnectionCard(yadeaCard, title: CWL("熊猫仪表连接"), symbol: "scooter", color: .systemBlue,
+            instructions: CWL("让 iPhone 加入熊猫仪表 Wi-Fi，在仪表上进入投屏界面后启动 CarPlay。画面按铺满整块面板发送，可在设置里用滑块微调缩放与上下位置；车把按键可在设置里映射成翻页、确认和返回。"),
             status: yadeaCardStatus)
         let yadeaSettings = UIButton(type: .system)
         yadeaSettings.configuration = .tinted()
@@ -735,6 +840,7 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
                 if !self.displayedVideo {
                     self.inlineVideoContainer.isHidden = false
                     self.displayedVideo = true; self.statusLabel.text = CWL("正在显示 CarPlay")
+                    self.rememberVehicle()
                     self.clearStartupHint()
                     self.networkStartupTask?.cancel()
                     self.networkStartupTask = nil
@@ -1210,6 +1316,8 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
     }
 
     private func refreshVideoOutputSummary() {
+        outputChips.setEnabled(!running)
+        refreshRememberedState()
         videoOutputSwitch.isEnabled = !running && outputMode == .browser
         videoOutputPortField.isEnabled = !running && outputMode == .browser && videoOutputSwitch.isOn
         secureVideoOutputPortField.isEnabled = videoOutputPortField.isEnabled
@@ -2573,45 +2681,59 @@ extension ReceiverViewController {
 
     fileprivate func rootSettingsPage() -> SettingsPageController {
         page(CWL("设置")) { [unowned self] in
-            var connection: [SettingsRow] = [
-                .page(CWL("使用说明"), icon: ("book.fill", .systemOrange)) { [unowned self] in self.usagePage() }
-            ]
+            var connection: [SettingsRow] = []
             if needsNetworkDetails {
                 connection.append(.page(CWL("Wi-Fi 与网络"), icon: ("wifi", .systemBlue), detail: { [unowned self] in
                     self.running || self.waitingForNetwork ? nil : CWL("添加")
                 }) { [unowned self] in self.wifiForm(adding: true) })
             }
             connection.append(.page(CWL("Wi-Fi 预设"), icon: ("list.bullet", .systemBlue), detail: { WiFiPresetStore.selected()?.ssid ?? CWL("未选择") }) { [unowned self] in self.presetsPage() })
-            connection.append(.control(CWL("当前输出"), icon: ("point.3.connected.trianglepath.dotted", .systemIndigo), headUnitOutput))
-            connection.append(.page(CWL("输出设置"), icon: ("slider.horizontal.3", .systemGray)) { [unowned self] in self.headUnitPage() })
+            connection.append(.control(CWL("开机自动连接"), icon: ("bolt.car", .systemBlue), autoConnectSwitch))
+            connection.append(.page(CWL("已记住的车机"), icon: ("checkmark.shield.fill", .systemGreen), detail: { [unowned self] in
+                self.rememberedVehicleName ?? CWL("尚未连接")
+            }) { [unowned self] in self.rememberedVehiclePage() })
+
+            var outputRows: [SettingsRow] = [
+                .control(CWL("当前输出"), icon: ("point.3.connected.trianglepath.dotted", .systemIndigo), headUnitOutput),
+                .page(CWL("输出设置"), icon: ("slider.horizontal.3", .systemGray)) { [unowned self] in self.headUnitPage() }
+            ]
             if outputMode == .browser {
-                connection.append(.page(CWL("HTTPS 设置"), icon: ("lock.shield", .systemBlue)) { [unowned self] in self.httpsSettingsPage() })
+                outputRows.append(.page(CWL("HTTPS 设置"), icon: ("lock.shield", .systemBlue)) { [unowned self] in self.httpsSettingsPage() })
             }
+            outputRows.append(.page(CWL("画面"), icon: ("rectangle.on.rectangle", .systemGreen), detail: { [unowned self] in
+                if self.outputMode == .zeehoSEPlus { return CWL("跟随仪表上报尺寸") }
+                return self.outputMode.usesInstrumentWiFi ? CWL("仪表固定尺寸") : self.followsCarScreen ? CWL("跟随车机") : self.resolutionControl.selectedTitle.components(separatedBy: "（").first
+            }) { [unowned self] in self.displayPage() })
+            outputRows.append(.control(CWL("CarPlay 外观"), icon: ("circle.lefthalf.filled", .systemBlue), appearanceControl))
+            outputRows.append(.page(CWL("声音"), icon: ("speaker.wave.2.fill", .systemOrange), detail: { [unowned self] in
+                switch self.soundOutput {
+                case .carWithin: return CWL("接收设备播放")
+                case .phone: return CWL("iPhone 输出")
+                case .browser: return CWL("Wi-Fi 伴音")
+                }
+            }) { [unowned self] in self.soundPage() })
+            outputRows.append(.control(CWL("驾驶位"), icon: ("steeringwheel", .systemTeal), driveControl))
+            outputRows.append(.page(CWL("车辆"), icon: ("car.fill", .systemTeal)) { [unowned self] in self.vehiclePage() })
+
+            let backgroundRows: [SettingsRow] = [
+                .page("电池与 BMS", icon: ("battery.100", .systemGreen)) { [unowned self] in self.antBMS.settingsPage() },
+                .control(CWL("锁屏与后台继续运行"), icon: ("lock.fill", .systemPurple), keepAliveSwitch),
+                .control(CWL("画中画开启时机"), icon: ("pip.fill", .systemIndigo), pictureInPictureTiming)
+            ]
+
+            let moreRows: [SettingsRow] = [
+                .page(CWL("运行日志"), icon: ("doc.text", .systemGray)) { [unowned self] in self.logPage() },
+                .page(CWL("使用说明"), icon: ("book.fill", .systemOrange)) { [unowned self] in self.usagePage() },
+                .page(CWL("诊断与实验"), icon: ("stethoscope", .systemTeal)) { [unowned self] in self.diagnosticsPage() },
+                .page(CWL("关于"), icon: ("info.circle.fill", .systemGray)) { [unowned self] in self.aboutPage() }
+            ]
+
             return [
-                SettingsSection(CWL("连接与输出"), connection),
-                SettingsSection("CarPlay", [
-                    .page(CWL("画面"), icon: ("rectangle.on.rectangle", .systemGreen), detail: { [unowned self] in
-                        if self.outputMode == .zeehoSEPlus { return "跟随仪表上报尺寸" }
-                        return self.outputMode.usesInstrumentWiFi ? CWL("仪表固定尺寸") : self.followsCarScreen ? CWL("跟随车机") : self.resolutionControl.selectedTitle.components(separatedBy: "（").first
-                    }) { [unowned self] in self.displayPage() },
-                    .control(CWL("CarPlay 外观"), icon: ("circle.lefthalf.filled", .systemBlue), appearanceControl),
-                    .page(CWL("声音"), icon: ("speaker.wave.2.fill", .systemOrange), detail: { [unowned self] in
-                        switch self.soundOutput {
-                        case .carWithin: return CWL("接收设备播放")
-                        case .phone: return CWL("iPhone 输出")
-                        case .browser: return CWL("Wi-Fi 伴音")
-                        }
-                    }) { [unowned self] in self.soundPage() },
-                    .control(CWL("驾驶位"), icon: ("steeringwheel", .systemTeal), driveControl),
-                    .page(CWL("车辆"), icon: ("car.fill", .systemTeal)) { [unowned self] in self.vehiclePage() }
-                ]),
-                SettingsSection("电池", [
-                    .page("电池与 BMS", icon: ("battery.100", .systemGreen)) { [unowned self] in self.antBMS.settingsPage() }
-                ]),
-                SettingsSection(CWL("后台与画中画"), footer: CWL("锁屏前，请在 iPhone「设置 › 通用 › CarPlay › CarWithin」中打开「锁定时允许 CarPlay」。后台运行会增加耗电。画中画仅显示实时画面。离开 App 时自动开启需打开 iPhone「设置 › 通用 › 画中画」中的自动选项。"), [
-                    .control(CWL("锁屏与后台继续运行"), icon: ("lock.fill", .systemPurple), keepAliveSwitch),
-                    .control(CWL("画中画开启时机"), icon: ("pip.fill", .systemIndigo), pictureInPictureTiming)
-                ]),
+                SettingsSection([.view(self.summaryCardView())]),
+                SettingsSection(CWL("连接"), connection),
+                SettingsSection(CWL("输出"), outputRows),
+                SettingsSection(CWL("电池与后台"), footer: CWL("锁屏前，请在 iPhone「设置 › 通用 › CarPlay › CarWithin」中打开「锁定时允许 CarPlay」。后台运行会增加耗电。画中画仅显示实时画面。离开 App 时自动开启需打开 iPhone「设置 › 通用 › 画中画」中的自动选项。"), backgroundRows),
+                SettingsSection(CWL("其他"), moreRows),
                 SettingsSection(CWL("支持"), [
                     .externalLink(CWL("关注作者"), icon: ("heart.fill", .systemRed), detail: CWL("抖音")) {
                         UIApplication.shared.open(Self.authorURL)
@@ -2619,11 +2741,82 @@ extension ReceiverViewController {
                     .page(CWL("请我喝杯咖啡"), icon: ("cup.and.saucer.fill", .systemOrange)) {
                         DeveloperSupportViewController()
                     },
-                    .page(CWL("诊断与实验"), icon: ("stethoscope", .systemTeal)) { [unowned self] in self.diagnosticsPage() },
                     .externalLink(CWL("反馈与建议"), icon: ("bubble.left.and.bubble.right.fill", .systemBlue)) {
                         UIApplication.shared.open(URL(string: "https://v.wjx.cn/vm/e5IX6eZ.aspx")!)
-                    },
-                    .page(CWL("关于"), icon: ("info.circle.fill", .systemGray)) { [unowned self] in self.aboutPage() }
+                    }
+                ])
+            ]
+        }
+    }
+
+    /// 设置页顶部的当前配置摘要。
+    private func summaryCardView() -> UIView {
+        let card = UIView()
+        let icon = UIImageView(image: UIImage(systemName: "car.side.fill"))
+        icon.tintColor = .label
+        icon.contentMode = .scaleAspectFit
+        icon.widthAnchor.constraint(equalToConstant: 30).isActive = true
+        icon.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        icon.setContentHuggingPriority(.required, for: .horizontal)
+        let title = UILabel()
+        title.text = headUnitOutput.selectedTitle
+        title.font = .preferredFont(forTextStyle: .headline)
+        title.adjustsFontForContentSizeCategory = true
+        let plan = planDisplay(for: targetScreen)
+        let detail = UILabel()
+        detail.text = "\(plan.width)×\(plan.height) · " + (outputMode.usesInstrumentWiFi ? CWL("仪表固定尺寸") : CWL("跟随车机"))
+        detail.font = .preferredFont(forTextStyle: .caption1)
+        detail.textColor = .secondaryLabel
+        detail.adjustsFontForContentSizeCategory = true
+        let text = UIStackView(arrangedSubviews: [title, detail])
+        text.axis = .vertical; text.spacing = 2
+        let dot = UIView()
+        dot.backgroundColor = rememberedVehicleName == nil ? .tertiaryLabel : ((UserDefaults.standard.object(forKey: "autoConnect") as? Bool) ?? true ? .systemGreen : .tertiaryLabel)
+        dot.layer.cornerRadius = 3
+        dot.widthAnchor.constraint(equalToConstant: 6).isActive = true
+        dot.heightAnchor.constraint(equalToConstant: 6).isActive = true
+        dot.setContentHuggingPriority(.required, for: .horizontal)
+        let note = UILabel()
+        let auto = (UserDefaults.standard.object(forKey: "autoConnect") as? Bool) ?? true
+        if let name = rememberedVehicleName {
+            note.text = CWL("已记住 {1} · {2}", [name, auto ? CWL("开机自动连接") : CWL("仅手动启动")])
+        } else {
+            note.text = CWL("还没有连接记录，第一次出画面后自动记住")
+        }
+        note.font = .preferredFont(forTextStyle: .caption2)
+        note.textColor = .secondaryLabel
+        note.numberOfLines = 0
+        note.adjustsFontForContentSizeCategory = true
+        let noteRow = UIStackView(arrangedSubviews: [dot, note])
+        noteRow.axis = .horizontal; noteRow.alignment = .top; noteRow.spacing = 6
+        let top = UIStackView(arrangedSubviews: [icon, text])
+        top.axis = .horizontal; top.alignment = .center; top.spacing = 12
+        let cardStack = UIStackView(arrangedSubviews: [top, noteRow])
+        cardStack.axis = .vertical; cardStack.spacing = 11
+        cardStack.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(cardStack)
+        NSLayoutConstraint.activate([
+            cardStack.topAnchor.constraint(equalTo: card.topAnchor, constant: 4),
+            cardStack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -4),
+            cardStack.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            cardStack.trailingAnchor.constraint(equalTo: card.trailingAnchor)
+        ])
+        return card
+    }
+
+    fileprivate func rememberedVehiclePage() -> SettingsPageController {
+        page(CWL("已记住的车机")) { [unowned self] in
+            guard let name = self.rememberedVehicleName else {
+                return [SettingsSection(footer: CWL("还没有连接记录。第一次启动并出画面后会记住当前车机。"), [])]
+            }
+            return [
+                SettingsSection([
+                    .info(CWL("车机"), name),
+                    .info(CWL("上次连接"), self.lastConnectedText ?? CWL("暂无记录")),
+                    .info(CWL("当前输出"), self.headUnitOutput.selectedTitle)
+                ]),
+                SettingsSection(footer: CWL("忘记后会清除连接记录，下次需要手动启动。"), [
+                    .action(CWL("忘记这台车机"), destructive: true) { [unowned self] in self.forgetVehicle() }
                 ])
             ]
         }
@@ -3019,7 +3212,7 @@ extension ReceiverViewController {
                     return .field(action.title, field, placeholder: CWL("如 1A 01"))
                 }
                 return [
-                    SettingsSection(CWL("雅迪 5 寸"), footer: CWL("让 iPhone 加入仪表 Wi-Fi，在仪表上打开投屏后启动 CarPlay。留空 IP 时自动取同网段网关 .1；仪表只认自己的地址时请手动填写。"), statusRows),
+                    SettingsSection(CWL("熊猫 5 寸"), footer: CWL("让 iPhone 加入仪表 Wi-Fi，在仪表上打开投屏后启动 CarPlay。留空 IP 时自动取同网段网关 .1；仪表只认自己的地址时请手动填写。"), statusRows),
                     SettingsSection(CWL("铺满全屏"), footer: CWL("100% 是刚好铺满整块面板（等比填充后居中裁掉溢出）。画面被裁掉重要内容就调小，想更满就调大；上下位置用于把裁切偏上或偏下。拖动即时生效。"), [
                         yadeaSliderRow(CWL("画面缩放"), slider: yadeaScaleSlider, value: yadeaScaleLabel),
                         yadeaSliderRow(CWL("上下位置"), slider: yadeaVerticalSlider, value: yadeaVerticalLabel)
@@ -3066,7 +3259,7 @@ extension ReceiverViewController {
     private func prepareExternalOutput(configuration: ReceiverConfiguration) {
         if configuration.zeehoAddress != nil { updateZeehoStatus(CWL("正在连接极核仪表…")) }
         if configuration.cfmotoProfile != nil { updateCfmotoStatus("正在推流到春风仪表…") }
-        if configuration.yadeaAddress != nil { updateYadeaStatus(CWL("正在连接雅迪仪表…")) }
+        if configuration.yadeaAddress != nil { updateYadeaStatus(CWL("正在连接熊猫仪表…")) }
         if configuration.ninebotAddress != nil { updateNinebotStatus(CWL("正在连接九号仪表…")) }
         if configuration.tailingAddress != nil { updateTailingStatus(CWL("正在连接台铃仪表…")) }
         if configuration.carLifeEnabled {
@@ -3518,3 +3711,83 @@ extension ReceiverViewController: PHPickerViewControllerDelegate {
         }
     }
 }
+
+/// 首页的「当前输出」芯片网格：两列等宽，选中项反色。
+final class OutputChipGridView: UIView {
+    var onSelect: ((Int) -> Void)?
+    var selectedIndex: Int = 0 { didSet { paintSelection() } }
+    private let rows = UIStackView()
+    private var chips: [UIButton] = []
+    private var enabled = true
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        rows.axis = .vertical
+        rows.spacing = 8
+        rows.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(rows)
+        NSLayoutConstraint.activate([
+            rows.topAnchor.constraint(equalTo: topAnchor),
+            rows.bottomAnchor.constraint(equalTo: bottomAnchor),
+            rows.leadingAnchor.constraint(equalTo: leadingAnchor),
+            rows.trailingAnchor.constraint(equalTo: trailingAnchor)
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func configure(titles: [String]) {
+        rows.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        chips.removeAll()
+        var current: UIStackView?
+        for (index, title) in titles.enumerated() {
+            if index % 2 == 0 {
+                let row = UIStackView()
+                row.axis = .horizontal; row.spacing = 8; row.distribution = .fillEqually
+                rows.addArrangedSubview(row)
+                current = row
+            }
+            let chip = UIButton(type: .system)
+            var configuration = UIButton.Configuration.plain()
+            configuration.title = title
+            configuration.baseForegroundColor = .label
+            configuration.titleLineBreakMode = .byTruncatingTail
+            configuration.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 6, bottom: 10, trailing: 6)
+            chip.configuration = configuration
+            chip.titleLabel?.font = .preferredFont(forTextStyle: .footnote)
+            chip.titleLabel?.adjustsFontForContentSizeCategory = true
+            chip.layer.cornerRadius = 11
+            chip.layer.cornerCurve = .continuous
+            chip.layer.borderWidth = 0.5
+            chip.addAction(UIAction { [weak self] _ in self?.onSelect?(index) }, for: .touchUpInside)
+            current?.addArrangedSubview(chip)
+            chips.append(chip)
+        }
+        // 奇数个时补一个空位，让最后一格保持左对齐的一半宽。
+        if titles.count % 2 == 1 { current?.addArrangedSubview(UIView()) }
+        paintSelection()
+    }
+
+    func setEnabled(_ value: Bool) {
+        guard enabled != value else { return }
+        enabled = value
+        paintSelection()
+    }
+
+    private func paintSelection() {
+        for (index, chip) in chips.enumerated() {
+            let on = index == selectedIndex
+            chip.backgroundColor = on ? .label : .tertiarySystemGroupedBackground
+            chip.configuration?.baseForegroundColor = on ? .systemBackground : .label
+            chip.layer.borderColor = on ? UIColor.clear.cgColor : UIColor.separator.cgColor
+            chip.isUserInteractionEnabled = enabled
+            chip.alpha = enabled ? 1 : 0.5
+        }
+    }
+
+    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
+        super.traitCollectionDidChange(previous)
+        guard previous?.userInterfaceStyle != traitCollection.userInterfaceStyle else { return }
+        paintSelection()
+    }
+}
+

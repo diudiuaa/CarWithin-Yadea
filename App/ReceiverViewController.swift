@@ -2907,18 +2907,7 @@ extension ReceiverViewController {
                 SettingsSection(CWL("连接"), connection),
                 SettingsSection(CWL("输出"), outputRows),
                 SettingsSection(CWL("电池与后台"), footer: CWL("锁屏前，请在 iPhone「设置 › 通用 › CarPlay › CarWithin」中打开「锁定时允许 CarPlay」。后台运行会增加耗电。画中画仅显示实时画面。离开 App 时自动开启需打开 iPhone「设置 › 通用 › 画中画」中的自动选项。"), backgroundRows),
-                SettingsSection(CWL("其他"), moreRows),
-                SettingsSection(CWL("支持"), [
-                    .externalLink(CWL("关注作者"), icon: ("heart.fill", .systemRed), detail: CWL("抖音")) {
-                        UIApplication.shared.open(Self.authorURL)
-                    },
-                    .page(CWL("请我喝杯咖啡"), icon: ("cup.and.saucer.fill", .systemOrange)) {
-                        DeveloperSupportViewController()
-                    },
-                    .externalLink(CWL("反馈与建议"), icon: ("bubble.left.and.bubble.right.fill", .systemBlue)) {
-                        UIApplication.shared.open(URL(string: "https://v.wjx.cn/vm/e5IX6eZ.aspx")!)
-                    }
-                ])
+                SettingsSection(CWL("其他"), moreRows)
             ]
         }
     }

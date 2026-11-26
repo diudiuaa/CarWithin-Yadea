@@ -3752,8 +3752,12 @@ final class OutputChipGridView: UIView {
             configuration.baseForegroundColor = .label
             configuration.titleLineBreakMode = .byTruncatingTail
             configuration.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 6, bottom: 10, trailing: 6)
+            configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+                var outgoing = incoming
+                outgoing.font = UIFont.preferredFont(forTextStyle: .footnote)
+                return outgoing
+            }
             chip.configuration = configuration
-            chip.titleLabel?.font = .preferredFont(forTextStyle: .footnote)
             chip.titleLabel?.adjustsFontForContentSizeCategory = true
             chip.layer.cornerRadius = 11
             chip.layer.cornerCurve = .continuous

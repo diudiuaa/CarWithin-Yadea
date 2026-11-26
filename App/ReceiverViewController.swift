@@ -729,7 +729,7 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         cfmotoCard.addArrangedSubview(cfmotoSettings)
         stack.addArrangedSubview(cfmotoCard)
         configureConnectionCard(yadeaCard, title: CWL("熊猫仪表连接"), symbol: "scooter", color: .systemBlue,
-            instructions: CWL("让 iPhone 加入熊猫仪表 Wi-Fi，在仪表上进入投屏界面后启动 CarPlay。画面按铺满整块面板发送，可在设置里用滑块微调缩放与上下位置；车把按键可在设置里映射成翻页、确认和返回。"),
+            instructions: CWL("让 iPhone 加入熊猫仪表 Wi-Fi，在仪表上进入投屏界面后启动 CarPlay。启动前请先在后台关闭车厂官方 App，它和本应用会抢同一条仪表通道。画面按铺满整块面板发送，可在设置里用滑块微调缩放与上下位置；车把按键可在设置里映射成翻页、确认和返回。"),
             status: yadeaCardStatus)
         let yadeaSettings = UIButton(type: .system)
         yadeaSettings.configuration = .tinted()

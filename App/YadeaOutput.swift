@@ -86,6 +86,8 @@ final class YadeaOutput {
         private var tcp: YadeaTCPSocket?
         private var udp: NinebotUDPSocket?
         private var rxBuffer: [UInt8] = []
+        /// 本次连接里仪表是否回过任何字节，用来判断「占着通道但不应答」。
+        private var receivedAnyByte = false
         private var localAddress = ""
         private var targetAddress = ""
         /// 缓冲里拼不出帧、又一直等不到新字节时的连续等待次数（超过就按垃圾字节处理）。
@@ -168,6 +170,7 @@ final class YadeaOutput {
             closeSockets()
             // Wi-Fi 可能已经切换（家里 ↔ 仪表热点），每次都用当前地址重建套接字。
             if let current = ReceiverConfiguration.wifiIPv4Address() { localAddress = current }
+            receivedAnyByte = false
             do {
                 udp = try NinebotUDPSocket(localIP: localAddress, localPort: 0,
                                            remoteIP: targetAddress, remotePort: YadeaProtocol.imagePort)
@@ -189,6 +192,9 @@ final class YadeaOutput {
                 attempt += 1
                 retryDelay = 2
             } catch {
+                if case let YadeaError.system(_, code) = error, code == ECONNREFUSED {
+                    onLog("仪表拒绝连接：8888 端口没有接受新连接。通常是被车厂官方 App 占着，请从后台关闭它，这里会自动重试")
+                }
                 fail(error)
             }
         }
@@ -289,6 +295,9 @@ final class YadeaOutput {
                 if now - negotiatedAt > 4 {
                     // 未收到 0x20，按默认 800×480@10 继续（YuRong 同款兜底）
                     onLog("未收到 0x20 配置，使用默认 \(navConfig.summary)")
+                    if !receivedAnyByte {
+                        onLog("仪表一个字节都没回：通道可能被车厂官方 App 占着。屏幕若没有画面，请先关闭该 App 再启动")
+                    }
                     beginRunning(now: now)
                 }
             case .running:
@@ -304,6 +313,7 @@ final class YadeaOutput {
             guard let tcp else { return }
             do {
                 while let chunk = try tcp.readSome(maxBytes: 4096, timeoutMs: 0) {
+                    if !chunk.isEmpty { receivedAnyByte = true }
                     rxBuffer.append(contentsOf: YadeaProtocol.bytes(chunk))
                 }
                 while let frame = nextBufferedFrame() {
